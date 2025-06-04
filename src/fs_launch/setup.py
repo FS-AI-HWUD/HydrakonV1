@@ -1,4 +1,6 @@
 from setuptools import find_packages, setup
+import os
+from glob import glob
 
 package_name = 'fs_launch'
 
@@ -10,13 +12,14 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.py'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='dalek',
-    maintainer_email='gravityfallsuae@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    maintainer='Aditya S',
+    maintainer_email='as2397@hw.ac.uk',
+    description='Main Launch file for Hydrakon',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

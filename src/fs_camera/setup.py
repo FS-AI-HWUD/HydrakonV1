@@ -13,13 +13,14 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='dalek',
-    maintainer_email='gravityfallsuae@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    maintainer='Aditya S',
+    maintainer_email='as2397@hw.ac.uk',
+    description='ZED2i Camera controller code',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'camera_detection_node = fs_camera.camera_detection_node:main',
         ],
     },
 )
