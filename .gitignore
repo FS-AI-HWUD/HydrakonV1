@@ -55,4 +55,3 @@ CATKIN_IGNORE
 # RSLidar ROS SDK
 src/rslidar_sdk
 src/rslidar_msg
-.gitmessage
