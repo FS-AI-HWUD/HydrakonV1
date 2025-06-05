@@ -93,7 +93,6 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_foxglove'))
     )
     
-    # ROS Bridge Server (alternative to Foxglove)
     rosbridge_server_node = Node(
         package='rosbridge_server',
         executable='rosbridge_websocket',
@@ -131,7 +130,6 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        # Launch arguments
         model_path_arg,
         foxglove_port_arg,
         camera_fps_arg,
@@ -140,24 +138,16 @@ def generate_launch_description():
         enable_foxglove_arg,
         enable_rosbridge_arg,
         
-        # System startup info
         LogInfo(msg="HYDRAKON FORMULA STUDENT"),
-        LogInfo(msg="ZED2i Camera + YOLO Cone Detection"),
-        LogInfo(msg="Foxglove Bridge + ROS2 Streaming"),
         get_ip_process,
         network_info_process,
-        LogInfo(msg="Controls: 1/2=Quality, 3=Toggle Images, Q=Quit, R=Reset"),
         LogInfo(msg="=" * 60),
         
-        # Core nodes
         camera_detection_node,
         static_transform_camera,
         
-        # Streaming services
         foxglove_bridge_node,
         rosbridge_server_node,
         
-        # Final status
         LogInfo(msg="✅ All systems online"),
-        LogInfo(msg="Reduced bandwidth, no more buffer limits!"),
     ])
