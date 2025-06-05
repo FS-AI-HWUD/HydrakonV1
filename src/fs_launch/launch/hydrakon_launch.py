@@ -1,5 +1,6 @@
 """
 Hydrakon Formula Student Launch File
+Enhanced with Robosense LiDAR Integration
 """
 
 from launch import LaunchDescription
@@ -14,6 +15,12 @@ def generate_launch_description():
         'model_path',
         default_value='/home/dalek/Documents/Zed_2i/cone/best_trt_fp16_640.engine',
         description='Path to TensorRT cone detection model'
+    )
+    
+    lidar_config_path_arg = DeclareLaunchArgument(
+        'lidar_config_path',
+        default_value='/home/dalek/ros2_ws/src/rslidar_sdk/config/my_config.yaml',
+        description='Path to Robosense LiDAR configuration file'
     )
     
     foxglove_port_arg = DeclareLaunchArgument(
@@ -52,7 +59,20 @@ def generate_launch_description():
         description='Enable ROS Bridge for web interface'
     )
     
+    enable_lidar_arg = DeclareLaunchArgument(
+        'enable_lidar',
+        default_value='true',
+        description='Enable Robosense LiDAR'
+    )
+    
+    enable_rviz_arg = DeclareLaunchArgument(
+        'enable_rviz',
+        default_value='false',
+        description='Launch RViz2 for visualization'
+    )
+    
     model_path = LaunchConfiguration('model_path')
+    lidar_config_path = LaunchConfiguration('lidar_config_path')
     foxglove_port = LaunchConfiguration('foxglove_port')
     camera_fps = LaunchConfiguration('camera_fps')
     confidence_threshold = LaunchConfiguration('confidence_threshold')
@@ -71,6 +91,17 @@ def generate_launch_description():
         }]
     )
     
+    lidar_node = Node(
+        package='rslidar_sdk',
+        executable='rslidar_sdk_node',
+        name='rslidar_sdk_node',
+        output='screen',
+        parameters=[{
+            'config_path': lidar_config_path,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_lidar'))
+    )
+    
     foxglove_bridge_node = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
@@ -87,6 +118,10 @@ def generate_launch_description():
             'topic_whitelist': [
                 '/zed2i/detections_data',
                 '/zed2i/cone_detections',
+                '/lidar/points',
+                '/perception/lidar_cluster',
+                '/perception/cone_markers',
+                '/tf',
                 '/tf_static'
             ],
         }],
@@ -108,8 +143,39 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_rosbridge'))
     )
     
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_rviz'))
+    )
+    
+    # === STATIC TRANSFORMS ===
+    
+    # Static transform: map to base_link
+    static_transform_map_to_base = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='map_to_base_transform',
+        arguments=['0', '0', '0', '0', '0', '0', 'map', 'base_link'],
+        output='screen'
+    )
+    
+    # Static transform: base_link to rslidar (LiDAR mounting position)
+    static_transform_base_to_lidar = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='base_to_lidar_transform',
+        # Need to adjust these values based on actual LiDAR mounting position, added placeholder values for now
+        # Format: x y z roll pitch yaw parent_frame child_frame
+        arguments=['0', '0', '1.5', '0', '0', '0', 'base_link', 'rslidar'],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_lidar'))
+    )
+    
     # Static transform: base_link to camera
-    static_transform_camera = Node(
+    static_transform_base_to_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='base_to_camera_transform',
@@ -117,37 +183,55 @@ def generate_launch_description():
         output='screen'
     )
     
+    # === LAUNCH INFORMATION ===
+    
     # Get IP address for connection info
     get_ip_process = ExecuteProcess(
         cmd=['bash', '-c', 'echo "Foxglove: ws://$(hostname -I | awk \'{print $1}\'):8765"'],
         output='screen'
     )
     
+    # LiDAR status info
+    lidar_info_process = ExecuteProcess(
+        cmd=['bash', '-c', 'echo "LiDAR: Robosense Helios 16 @ 192.168.1.200"'],
+        output='screen'
+    )
+    
     # Network optimization info
     network_info_process = ExecuteProcess(
-        cmd=['bash', '-c', 'echo "ULTRA Mode: 320x180@7.5fps detection + data only"'],
+        cmd=['bash', '-c', 'echo "Systems Active: LiDAR, Camera, Foxglove, ROS Bridge"'],
         output='screen'
     )
     
     return LaunchDescription([
         model_path_arg,
+        lidar_config_path_arg,
         foxglove_port_arg,
         camera_fps_arg,
         confidence_threshold_arg,
         iou_threshold_arg,
         enable_foxglove_arg,
         enable_rosbridge_arg,
+        enable_lidar_arg,
+        enable_rviz_arg,
         
-        LogInfo(msg="HYDRAKON FORMULA STUDENT"),
+        LogInfo(msg="HYDRAKON FS-AI SYSTEM"),
+        LogInfo(msg="=" * 60),
         get_ip_process,
+        lidar_info_process,
         network_info_process,
         LogInfo(msg="=" * 60),
         
         camera_detection_node,
-        static_transform_camera,
+        lidar_node,
+        
+        static_transform_map_to_base,
+        static_transform_base_to_lidar,
+        static_transform_base_to_camera,
         
         foxglove_bridge_node,
         rosbridge_server_node,
+        rviz_node,
         
-        LogInfo(msg="✅ All systems online"),
+        LogInfo(msg="✅ All systems online!"),
     ])
