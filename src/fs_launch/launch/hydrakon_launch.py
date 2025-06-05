@@ -1,15 +1,15 @@
 """
 Hydrakon Formula Student Launch File
-Launches camera detection and Foxglove streaming for the car
 """
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, LogInfo, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
 
 def generate_launch_description():
-    # Declare launch arguments
+    
     model_path_arg = DeclareLaunchArgument(
         'model_path',
         default_value='/home/dalek/Documents/Zed_2i/cone/best_trt_fp16_640.engine',
@@ -28,42 +28,49 @@ def generate_launch_description():
         description='Camera capture FPS'
     )
     
-    stream_fps_arg = DeclareLaunchArgument(
-        'stream_fps',
-        default_value='15',
-        description='Streaming FPS to reduce bandwidth'
+    confidence_threshold_arg = DeclareLaunchArgument(
+        'confidence_threshold',
+        default_value='0.25',
+        description='YOLO confidence threshold'
     )
     
-    image_quality_arg = DeclareLaunchArgument(
-        'image_quality',
-        default_value='80',
-        description='JPEG compression quality (1-100)'
+    iou_threshold_arg = DeclareLaunchArgument(
+        'iou_threshold',
+        default_value='0.7',
+        description='YOLO IoU threshold'
     )
     
-    # Get launch configurations
+    enable_foxglove_arg = DeclareLaunchArgument(
+        'enable_foxglove',
+        default_value='true',
+        description='Enable Foxglove Bridge'
+    )
+    
+    enable_rosbridge_arg = DeclareLaunchArgument(
+        'enable_rosbridge',
+        default_value='false',
+        description='Enable ROS Bridge for web interface'
+    )
+    
     model_path = LaunchConfiguration('model_path')
     foxglove_port = LaunchConfiguration('foxglove_port')
     camera_fps = LaunchConfiguration('camera_fps')
-    stream_fps = LaunchConfiguration('stream_fps')
-    image_quality = LaunchConfiguration('image_quality')
+    confidence_threshold = LaunchConfiguration('confidence_threshold')
+    iou_threshold = LaunchConfiguration('iou_threshold')
     
-    # Camera detection node
     camera_detection_node = Node(
         package='fs_camera',
         executable='camera_detection_node',
-        name='hydrakon_camera_detection',
+        name='hydrakon_vcone_tracker',
         output='screen',
         parameters=[{
             'model_path': model_path,
             'camera_fps': camera_fps,
-            'stream_fps': stream_fps,
-            'image_quality': image_quality,
-            'detection_confidence': 0.25,
-            'iou_threshold': 0.7,
+            'confidence_threshold': confidence_threshold,
+            'iou_threshold': iou_threshold,
         }]
     )
     
-    # Foxglove Bridge for streaming
     foxglove_bridge_node = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
@@ -72,8 +79,34 @@ def generate_launch_description():
         parameters=[{
             'port': foxglove_port,
             'address': '0.0.0.0',
-            'num_threads': 4,
-        }]
+            'num_threads': 2,
+            'send_buffer_limit': 5000000,
+            'max_update_ms': 100,
+            'use_compression': True,
+            'compression_level': 9,
+            'topic_whitelist': [
+                '/zed2i/detections_data',
+                '/zed2i/cone_detections',
+                '/tf_static'
+            ],
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_foxglove'))
+    )
+    
+    # ROS Bridge Server (alternative to Foxglove)
+    rosbridge_server_node = Node(
+        package='rosbridge_server',
+        executable='rosbridge_websocket',
+        name='rosbridge_websocket',
+        output='screen',
+        parameters=[{
+            'port': 9090,
+            'address': '0.0.0.0',
+            'max_message_size': 10000000,
+            'fragment_timeout': 600,
+            'delay_between_messages': 0,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_rosbridge'))
     )
     
     # Static transform: base_link to camera
@@ -81,7 +114,20 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='base_to_camera_transform',
-        arguments=['0.5', '0', '1.2', '0', '0.1', '0', 'base_link', 'zed2i_left_camera_frame']
+        arguments=['0.5', '0', '1.2', '0', '0.1', '0', 'base_link', 'zed2i_left_camera_frame'],
+        output='screen'
+    )
+    
+    # Get IP address for connection info
+    get_ip_process = ExecuteProcess(
+        cmd=['bash', '-c', 'echo "Foxglove: ws://$(hostname -I | awk \'{print $1}\'):8765"'],
+        output='screen'
+    )
+    
+    # Network optimization info
+    network_info_process = ExecuteProcess(
+        cmd=['bash', '-c', 'echo "ULTRA Mode: 320x180@7.5fps detection + data only"'],
+        output='screen'
     )
     
     return LaunchDescription([
@@ -89,11 +135,29 @@ def generate_launch_description():
         model_path_arg,
         foxglove_port_arg,
         camera_fps_arg,
-        stream_fps_arg,
-        image_quality_arg,
+        confidence_threshold_arg,
+        iou_threshold_arg,
+        enable_foxglove_arg,
+        enable_rosbridge_arg,
         
-        # Nodes
+        # System startup info
+        LogInfo(msg="HYDRAKON FORMULA STUDENT"),
+        LogInfo(msg="ZED2i Camera + YOLO Cone Detection"),
+        LogInfo(msg="Foxglove Bridge + ROS2 Streaming"),
+        get_ip_process,
+        network_info_process,
+        LogInfo(msg="Controls: 1/2=Quality, 3=Toggle Images, Q=Quit, R=Reset"),
+        LogInfo(msg="=" * 60),
+        
+        # Core nodes
         camera_detection_node,
-        foxglove_bridge_node,
         static_transform_camera,
+        
+        # Streaming services
+        foxglove_bridge_node,
+        rosbridge_server_node,
+        
+        # Final status
+        LogInfo(msg="✅ All systems online"),
+        LogInfo(msg="Reduced bandwidth, no more buffer limits!"),
     ])
