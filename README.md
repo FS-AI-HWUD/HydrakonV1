@@ -11,3 +11,18 @@
 - TP-Link AX1500 Wi-Fi 6
 
 ## Network Settings
+- **IP Configuration**
+  - Jetson AGX Orin ➔ 192.168.1.100 (LAN1)
+  - Robosense Helios 16 ➔ 192.168.1.200 (LAN2)
+  - CHCNAV CGI-410 INS ➔ 192.168.1.201 (LAN3)
+
+- **LiDAR configuration**
+  - **Device IP Address** ➔ 192.168.1.200
+  - **Device IP Mask** ➔ 255.255.255.0
+  - **Device IP Gateway** ➔ 192.168.1.1
+  - **Destination IP Address** ➔ 192.168.1.100 **(Jetson)**
+  - **MSOP Port** ➔ 6699
+  - **DIFOP Port** ➔ 7788
+  - **Return Mode** ➔ Strongest
+  - **Rotation Speed** ➔ Set it to 600/1200 as needed
+  - **Operation Mode** ➔ High Performance
