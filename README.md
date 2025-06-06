@@ -54,7 +54,7 @@
 - Ensure you have [configured your router](#configuring-the-router) using the [.bin](/TPLinkConfig.bin) file
 - Connect to the Hotspot from the router
 - Open Foxglove ➔ Open connection ➔ Foxglove websocket
-- Then connect to `ws://192.168.1.100:8745`
+- Then connect to `ws://192.168.1.100:8765`
 - You have now connected to the Jetson, feel free to add in any topics as you like
 
 
@@ -66,3 +66,18 @@
   - **Storage**: Min 10 GB
   - **OS**: Ubuntu 22.04 LTS
   - **ROS2 Version**: ROS2 Humble
+
+## Common Issues
+
+**LiDAR not detected:**
+- Check physical connections (LAN2 port)
+- Verify LiDAR IP: `ping 192.168.1.200`
+
+**Cannot SSH to Jetson:**
+- Use Ethernet IP: `ssh username@192.168.1.100`
+
+**Foxglove can't connect:**
+- Ensure connected to router WiFi
+- Check Jetson IP: `ws://192.168.1.100:8765`
+
+**If any other issues arise, feel free to contact our team at [Hydrakon](https://www.instagram.com/atlasracingfs/). Don't worry, Hydrakon, and Atlas Racing come under HWURacing**
