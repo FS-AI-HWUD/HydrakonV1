@@ -10,4 +10,4 @@
 - CHCNAV CGI-410 (INS)
 - TP-Link AX1500 Wi-Fi 6
 
-## Getting Started
+## Network Settings
