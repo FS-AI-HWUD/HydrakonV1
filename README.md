@@ -27,6 +27,13 @@
   - **Rotation Speed** ➔ Set it to 600/1200 as needed
   - **Operation Mode** ➔ High Performance
 
+## Configuring the Router
+- Connect the router to your Dev System using an Ethernet cable, and then navigate to [192.168.0.1](http://192.168.0.1) or [192.168.1.1](http://192.168.1.1) depending on your router
+- Set the admin password and Wi-Fi password
+- Go to Advanced ➔ Backup and Restore
+- Then download the configuration file from [here](/TPLinkConfig.bin) and load it in
+- You should now have your router configured **:P**
+
 ## Getting Started
 1. Make sure you have ROS2 Installed, if not follow instructions [here](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)
 2. Get the RSLidar SDK package from [here](https://github.com/RoboSense-LiDAR/rslidar_sdk)
@@ -40,7 +47,16 @@
     source install/setup.bash
     ros2 launch fs_launch hydrakon_launch.py
     ```
-8. **YIPPEE** you now have everything working **(I hope) :P**
+8. **YIPPEE** you now have everything working **(I hope) :P**, move on to [visualizing data](#to-visualize-data)
+
+## To Visualize Data
+- Ensure you have Foxglove Studio Installed, else download it from [here](https://foxglove.dev/download)
+- Ensure you have [configured your router](#configuring-the-router) using the [.bin](/TPLinkConfig.bin) file
+- Connect to the Hotspot from the router
+- Open Foxglove ➔ Open connection ➔ Foxglove websocket
+- Then connect to `ws://192.168.1.100:8745`
+- You have now connected to the Jetson, feel free to add in any topics as you like
+
 
 ## Our recommended system configuration
 - **Dev Systems**
