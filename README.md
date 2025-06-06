@@ -11,7 +11,7 @@
 - TP-Link AX1500 Wi-Fi 6
 
 ## Network Settings
-- **IP Configuration**
+- **Ethernet Connections**
   - **Jetson AGX Orin** ➔ 192.168.1.100 (LAN1)
   - **Robosense Helios 16** ➔ 192.168.1.200 (LAN2)
   - **CHCNAV CGI-410 INS** ➔ 192.168.1.201 (LAN3)
