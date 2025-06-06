@@ -40,9 +40,10 @@
 3. Get the RSLidar MSG package from [here](https://github.com/RoboSense-LiDAR/rslidar_msg)
 4. Clone this repository using `git clone https://github.com/FS-AI-HWUD/Hydrakon.git`
 5. Add the `rslidar_sdk` and  `rslidar_msg` into the repository
-6. Source ROS2 using `source /opt/ros/<version>/setup.bash` **(replace version with your version of ROS2)**
+6. Source ROS2 using `source /opt/ros/humble/setup.bash` **(for ROS2 Humble)**
 7. Run the following commands one after the other
     ```shell
+    cd Hydrakon
     colcon build --symlink-install
     source install/setup.bash
     ros2 launch fs_launch hydrakon_launch.py
