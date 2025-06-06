@@ -1,8 +1,6 @@
 from setuptools import find_packages, setup
-import os
-from glob import glob
 
-package_name = 'fs_lidar'
+package_name = 'fs_planning'
 
 setup(
     name=package_name,
@@ -12,21 +10,16 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'),
-            glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'config'),
-            glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Aditya S',
     maintainer_email='as2397@hw.ac.uk',
-    description='LiDAR clustering for Hydrakon',
+    description='Path planning package for Hydrakon',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'rslidar_cluster = fs_lidar.lidar_cluster:main',
         ],
     },
 )

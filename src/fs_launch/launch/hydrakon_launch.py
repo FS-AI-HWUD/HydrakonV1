@@ -64,6 +64,12 @@ def generate_launch_description():
         default_value='true',
         description='Enable Robosense LiDAR'
     )
+
+    enable_clustering_arg = DeclareLaunchArgument(
+        'enable_clustering',
+        default_value='true',
+        description='Enable LiDAR cone clustering'
+    )
     
     enable_rviz_arg = DeclareLaunchArgument(
         'enable_rviz',
@@ -100,6 +106,14 @@ def generate_launch_description():
             'config_path': lidar_config_path,
         }],
         condition=IfCondition(LaunchConfiguration('enable_lidar'))
+    )
+
+    lidar_cluster_node = Node(
+        package='fs_lidar',
+        executable='rslidar_cluster',
+        name='rslidar_cluster',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_clustering'))
     )
     
     foxglove_bridge_node = Node(
@@ -213,6 +227,7 @@ def generate_launch_description():
         enable_foxglove_arg,
         enable_rosbridge_arg,
         enable_lidar_arg,
+        enable_clustering_arg,
         enable_rviz_arg,
         
         LogInfo(msg="HYDRAKON FS-AI SYSTEM"),
@@ -224,6 +239,7 @@ def generate_launch_description():
         
         camera_detection_node,
         lidar_node,
+        lidar_cluster_node,
         
         static_transform_map_to_base,
         static_transform_base_to_lidar,
