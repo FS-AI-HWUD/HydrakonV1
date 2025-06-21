@@ -20,6 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'nmea_bridge = fs_planning.nmea_bridge:main',
         ],
     },
 )

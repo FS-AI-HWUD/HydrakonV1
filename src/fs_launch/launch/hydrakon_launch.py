@@ -76,6 +76,12 @@ def generate_launch_description():
         default_value='false',
         description='Launch RViz2 for visualization'
     )
+
+    enable_gps_arg = DeclareLaunchArgument(
+        'enable_gps',
+        default_value='true',
+        description='Enable CHCNAV INS GPS bridge'
+    )
     
     model_path = LaunchConfiguration('model_path')
     lidar_config_path = LaunchConfiguration('lidar_config_path')
@@ -115,6 +121,14 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_clustering'))
     )
+
+    nmea_gps_bridge_node = Node(
+        package='fs_planning',
+        executable='nmea_bridge',
+        name='chcnav_ins_bridge',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_gps'))
+    )
     
     foxglove_bridge_node = Node(
         package='foxglove_bridge',
@@ -135,6 +149,10 @@ def generate_launch_description():
                 '/lidar/points',
                 '/perception/lidar_cluster',
                 '/perception/cone_markers',
+                '/ins/gnss',
+                '/ins/nav',
+                '/ins/heading',
+                '/ins/velocity',
                 '/tf',
                 '/tf_static'
             ],
@@ -197,23 +215,34 @@ def generate_launch_description():
         output='screen'
     )
     
+    static_transform_base_to_gps = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='base_to_gps_transform',
+        arguments=['0', '0', '2.0', '0', '0', '0', 'base_link', 'gps'],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_gps'))
+    )
+    
     # === LAUNCH INFORMATION ===
     
-    # Get IP address for connection info
     get_ip_process = ExecuteProcess(
         cmd=['bash', '-c', 'echo "Foxglove: ws://$(hostname -I | awk \'{print $1}\'):8765"'],
         output='screen'
     )
     
-    # LiDAR status info
     lidar_info_process = ExecuteProcess(
         cmd=['bash', '-c', 'echo "LiDAR: Robosense Helios 16 @ 192.168.1.200"'],
         output='screen'
     )
     
-    # Network optimization info
+    gps_info_process = ExecuteProcess(
+        cmd=['bash', '-c', 'echo "GPS/INS: CHCNAV CGI-410 @ 192.168.1.201"'],
+        output='screen'
+    )
+    
     network_info_process = ExecuteProcess(
-        cmd=['bash', '-c', 'echo "Systems Active: LiDAR, Camera, Foxglove, ROS Bridge"'],
+        cmd=['bash', '-c', 'echo "Systems Active: LiDAR, Camera, GPS/INS, Foxglove"'],
         output='screen'
     )
     
@@ -229,21 +258,25 @@ def generate_launch_description():
         enable_lidar_arg,
         enable_clustering_arg,
         enable_rviz_arg,
+        enable_gps_arg,
         
         LogInfo(msg="HYDRAKON FS-AI SYSTEM"),
         LogInfo(msg="=" * 60),
         get_ip_process,
         lidar_info_process,
+        gps_info_process,
         network_info_process,
         LogInfo(msg="=" * 60),
         
         camera_detection_node,
         lidar_node,
         lidar_cluster_node,
+        nmea_gps_bridge_node,
         
         static_transform_map_to_base,
         static_transform_base_to_lidar,
         static_transform_base_to_camera,
+        static_transform_base_to_gps,
         
         foxglove_bridge_node,
         rosbridge_server_node,

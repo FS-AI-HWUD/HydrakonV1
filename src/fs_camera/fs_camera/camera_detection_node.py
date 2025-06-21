@@ -1,5 +1,6 @@
 """
 Hydrakon VCone (Visual Cone) Tracker
+Fixed version without bluish tint
 """
 
 import rclpy
@@ -28,12 +29,13 @@ class HydrakonVConeTracker(Node):
         self.cone_detections_pub = self.create_publisher(Image, '/zed2i/cone_detections', 5)
         self.detections_data_pub = self.create_publisher(Detection2DArray, '/zed2i/detections_data', 10)
         
-        self.stream_resolution = (480, 270)
+        # INCREASED RESOLUTION for Foxglove
+        self.stream_resolution = (640, 360)  # Increased from (320, 180)
         self.display_resolution = (1280, 720)
-        self.jpeg_quality = 40
+        self.jpeg_quality = 60  # Increased quality from 40
         self.frame_skip_counter = 0
-        self.publish_image_every_n_frames = 4
-        self.publish_raw_every_n_frames = 8
+        self.publish_image_every_n_frames = 3  # Faster publishing (was 4)
+        self.publish_raw_every_n_frames = 6   # Faster publishing (was 8)
         
         self.fps_history = deque(maxlen=10)
         self.inference_history = deque(maxlen=10)
@@ -42,12 +44,13 @@ class HydrakonVConeTracker(Node):
         self.total_detections = 0
         self.session_start = time.time()
         
+        # Fixed color values for proper BGR display
         self.cone_types = {
-            0: {'name': 'Yellow', 'color': (0, 255, 255), 'symbol': '🟡'},
-            1: {'name': 'Blue', 'color': (255, 100, 0), 'symbol': '🔵'},
-            2: {'name': 'Orange', 'color': (0, 165, 255), 'symbol': '🟠'},
-            3: {'name': 'Large Orange', 'color': (0, 100, 255), 'symbol': '🟠'},
-            4: {'name': 'Unknown', 'color': (128, 128, 128), 'symbol': '⚪'}
+            0: {'name': 'Yellow', 'color': (0, 255, 255), 'symbol': '🟡'},      # Yellow in BGR
+            1: {'name': 'Blue', 'color': (255, 0, 0), 'symbol': '🔵'},         # Blue in BGR (FIXED)
+            2: {'name': 'Orange', 'color': (0, 165, 255), 'symbol': '🟠'},     # Orange in BGR
+            3: {'name': 'Large Orange', 'color': (0, 100, 255), 'symbol': '🟠'}, # Large Orange in BGR
+            4: {'name': 'Unknown', 'color': (128, 128, 128), 'symbol': '⚪'}   # Gray in BGR
         }
         
     def initialize_model(self):
@@ -108,11 +111,12 @@ class HydrakonVConeTracker(Node):
         
         return detection_array
 
-    def compress_image(self, image, quality=40):
-        """Aggressive compression for streaming"""
+    def compress_image(self, image, quality=60):
+        """Compression for streaming - INCREASED QUALITY"""
         try:
-            if image.shape[0] > 300:
-                small_image = cv2.resize(image, (320, 180))
+            # INCREASED minimum resolution
+            if image.shape[0] > 360:
+                small_image = cv2.resize(image, self.stream_resolution)  # Now (640, 360)
             else:
                 small_image = image
                 
@@ -125,12 +129,14 @@ class HydrakonVConeTracker(Node):
             return image
 
     def publish_optimized_images(self, frame, display_frame, timestamp, detections):
-        """Publish images with smart optimization"""
+        """Publish images with smart optimization - FIXED COLOR CONVERSION"""
         self.frame_skip_counter += 1
         
         if self.frame_skip_counter % self.publish_raw_every_n_frames == 0:
             try:
-                raw_frame_small = cv2.resize(frame, (320, 180))
+                # INCREASED RESOLUTION: Now using stream_resolution (640x360)
+                raw_frame_small = cv2.resize(frame, self.stream_resolution)
+                # FIXED: Proper RGB to BGR conversion for ROS
                 raw_frame_bgr = cv2.cvtColor(raw_frame_small, cv2.COLOR_RGB2BGR)
                 
                 compressed_raw = self.compress_image(raw_frame_bgr, self.jpeg_quality)
@@ -145,10 +151,13 @@ class HydrakonVConeTracker(Node):
         
         if detections and self.frame_skip_counter % self.publish_image_every_n_frames == 0:
             try:
-                detection_frame_small = cv2.resize(display_frame, (320, 180))
+                # INCREASED RESOLUTION: Now using stream_resolution (640x360)
+                detection_frame_small = cv2.resize(display_frame, self.stream_resolution)
+                # FIXED: Proper RGB to BGR conversion for ROS
                 detection_frame_bgr = cv2.cvtColor(detection_frame_small, cv2.COLOR_RGB2BGR)
                 
-                compressed_detection = self.compress_image(detection_frame_bgr, self.jpeg_quality - 10)
+                # HIGHER QUALITY for detection images
+                compressed_detection = self.compress_image(detection_frame_bgr, self.jpeg_quality + 10)
                 
                 cone_detections_msg = self.bridge.cv2_to_imgmsg(compressed_detection, encoding='bgr8')
                 cone_detections_msg.header.stamp = timestamp
@@ -159,7 +168,7 @@ class HydrakonVConeTracker(Node):
                 self.get_logger().debug(f"Failed to publish cone detections: {e}")
 
     def process_detections(self, results, display_frame):
-        """Process YOLO detections"""
+        """Process YOLO detections - FIXED for RGB frame processing"""
         current_cones = defaultdict(int)
         detections = []
         
@@ -191,11 +200,15 @@ class HydrakonVConeTracker(Node):
                         'class': class_id
                     })
                     
-                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), cone_info['color'], 2)
+                    # FIXED: Convert BGR color to RGB for drawing on RGB frame
+                    color_bgr = cone_info['color']
+                    color_rgb = (color_bgr[2], color_bgr[1], color_bgr[0])  # BGR to RGB conversion
+                    
+                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), color_rgb, 2)
                     
                     label = f"{cone_info['name']} {confidence:.2f}"
                     cv2.putText(display_frame, label, (x1, y1-10), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, cone_info['color'], 1)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color_rgb, 1)
         
         for cone_name, count in current_cones.items():
             self.cone_counts[cone_name] += count
@@ -215,7 +228,7 @@ class HydrakonVConeTracker(Node):
         image = sl.Mat()
         
         self.get_logger().info("Hydrakon VCone Tracker ACTIVE - ROS TOPICS ONLY")
-        self.get_logger().info(f"Stream resolution: 320x180 (ultra-small)")
+        self.get_logger().info(f"Stream resolution: 640x360 (INCREASED QUALITY)")
         self.get_logger().info(f"Detection stream rate: {30/self.publish_image_every_n_frames:.1f} FPS")
         self.get_logger().info(f"Raw stream rate: {30/self.publish_raw_every_n_frames:.1f} FPS")
         self.get_logger().info("Raw feed always streams, detection images only when cones found!")
@@ -233,6 +246,7 @@ class HydrakonVConeTracker(Node):
                     self.zed.retrieve_image(image, sl.VIEW.LEFT)
                     
                     frame = image.get_data()
+                    # FIXED: Proper RGBA to RGB conversion (this was causing the bluish tint)
                     frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
                     
                     timestamp = self.get_clock().now().to_msg()
