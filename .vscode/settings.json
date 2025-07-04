@@ -1,3 +1,29 @@
 {
-    "ros.distro": "humble"
+    "ros.distro": "humble",
+    "python.autoComplete.extraPaths": [
+        "/home/abdul/Documents/Hydrakon/install/hydrakon_can/local/lib/python3.10/dist-packages",
+        "/home/abdul/Documents/Hydrakon/build/fs_planning",
+        "/home/abdul/Documents/Hydrakon/install/fs_planning/lib/python3.10/site-packages",
+        "/home/abdul/Documents/Hydrakon/build/fs_lidar",
+        "/home/abdul/Documents/Hydrakon/install/fs_lidar/lib/python3.10/site-packages",
+        "/home/abdul/Documents/Hydrakon/build/fs_launch",
+        "/home/abdul/Documents/Hydrakon/install/fs_launch/lib/python3.10/site-packages",
+        "/home/abdul/Documents/Hydrakon/build/fs_camera",
+        "/home/abdul/Documents/Hydrakon/install/fs_camera/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/abdul/Documents/Hydrakon/install/hydrakon_can/local/lib/python3.10/dist-packages",
+        "/home/abdul/Documents/Hydrakon/build/fs_planning",
+        "/home/abdul/Documents/Hydrakon/install/fs_planning/lib/python3.10/site-packages",
+        "/home/abdul/Documents/Hydrakon/build/fs_lidar",
+        "/home/abdul/Documents/Hydrakon/install/fs_lidar/lib/python3.10/site-packages",
+        "/home/abdul/Documents/Hydrakon/build/fs_launch",
+        "/home/abdul/Documents/Hydrakon/install/fs_launch/lib/python3.10/site-packages",
+        "/home/abdul/Documents/Hydrakon/build/fs_camera",
+        "/home/abdul/Documents/Hydrakon/install/fs_camera/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
 }
