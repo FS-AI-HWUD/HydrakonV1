@@ -1,13 +1,15 @@
 """
 Hydrakon Formula Student Launch File
-Enhanced with Robosense LiDAR Integration
+Enhanced with Robosense LiDAR Integration and FS Control Module
 """
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument, LogInfo, ExecuteProcess
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, LogInfo, ExecuteProcess, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.conditions import IfCondition
+from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     
@@ -83,12 +85,20 @@ def generate_launch_description():
         description='Enable CHCNAV INS GPS bridge'
     )
     
+    enable_control_arg = DeclareLaunchArgument(
+        'enable_control',
+        default_value='true',
+        description='Enable FS Control Module'
+    )
+    
     model_path = LaunchConfiguration('model_path')
     lidar_config_path = LaunchConfiguration('lidar_config_path')
     foxglove_port = LaunchConfiguration('foxglove_port')
     camera_fps = LaunchConfiguration('camera_fps')
     confidence_threshold = LaunchConfiguration('confidence_threshold')
     iou_threshold = LaunchConfiguration('iou_threshold')
+    
+    # === PERCEPTION NODES ===
     
     camera_detection_node = Node(
         package='fs_camera',
@@ -130,6 +140,44 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_gps'))
     )
     
+    # === FS CONTROL MODULE ===
+    
+    # Get control module directory for config
+    control_pkg_dir = FindPackageShare('fs_control')
+    pid_config = PathJoinSubstitution([control_pkg_dir, 'config', 'pid_params.yaml'])
+    
+    # Speed Processor Node
+    speed_processor_node = Node(
+        package='fs_control',
+        executable='speed_processor',
+        name='speed_processor',
+        output='screen',
+        parameters=[pid_config],
+        condition=IfCondition(LaunchConfiguration('enable_control'))
+    )
+    
+    # PID Controller Node
+    pid_controller_node = Node(
+        package='fs_control',
+        executable='pid_controller',
+        name='pid_controller',
+        output='screen',
+        parameters=[pid_config],
+        condition=IfCondition(LaunchConfiguration('enable_control'))
+    )
+    
+    # Vehicle Interface Node
+    vehicle_interface_node = Node(
+        package='fs_control',
+        executable='vehicle_interface',
+        name='vehicle_interface',
+        output='screen',
+        parameters=[pid_config],
+        condition=IfCondition(LaunchConfiguration('enable_control'))
+    )
+    
+    # === VISUALIZATION & MONITORING ===
+    
     foxglove_bridge_node = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
@@ -154,7 +202,13 @@ def generate_launch_description():
                 '/ins/heading',
                 '/ins/velocity',
                 '/tf',
-                '/tf_static'
+                '/tf_static',
+                # Control topics
+                '/acceleration_cmd',
+                '/planning/reference_steering',
+                '/hydrakon_can/command',
+                '/current_speed',
+                '/imu/data'
             ],
         }],
         condition=IfCondition(LaunchConfiguration('enable_foxglove'))
@@ -241,8 +295,14 @@ def generate_launch_description():
         output='screen'
     )
     
+    control_info_process = ExecuteProcess(
+        cmd=['bash', '-c', 'echo "Control: PID Controller + Vehicle Interface → ADS-DV CAN"'],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_control'))
+    )
+    
     network_info_process = ExecuteProcess(
-        cmd=['bash', '-c', 'echo "Systems Active: LiDAR, Camera, GPS/INS, Foxglove"'],
+        cmd=['bash', '-c', 'echo "Systems Active: LiDAR, Camera, GPS/INS, Control, Foxglove"'],
         output='screen'
     )
     
@@ -259,25 +319,35 @@ def generate_launch_description():
         enable_clustering_arg,
         enable_rviz_arg,
         enable_gps_arg,
+        enable_control_arg,
         
         LogInfo(msg="HYDRAKON FS-AI SYSTEM"),
         LogInfo(msg="=" * 60),
         get_ip_process,
         lidar_info_process,
         gps_info_process,
+        control_info_process,
         network_info_process,
         LogInfo(msg="=" * 60),
         
+        # Perception
         camera_detection_node,
         lidar_node,
         lidar_cluster_node,
         nmea_gps_bridge_node,
         
+        # Control System
+        speed_processor_node,
+        pid_controller_node,
+        vehicle_interface_node,
+        
+        # Transforms
         static_transform_map_to_base,
         static_transform_base_to_lidar,
         static_transform_base_to_camera,
         static_transform_base_to_gps,
         
+        # Visualization
         foxglove_bridge_node,
         rosbridge_server_node,
         rviz_node,
