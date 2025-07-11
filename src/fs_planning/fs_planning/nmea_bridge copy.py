@@ -298,12 +298,12 @@ class CHCNAVINSBridge(Node):
                 return 0.0
             
             # Standard NMEA format
-            if coord_type == 'lat':  # Latitude: DDMM.MMMMMM
+            if coord_type == 'lat':  # Latitude: DDMM.MMMM
                 degrees = int(coord_str[:2])
                 minutes = float(coord_str[2:])
-            else:  # Longitude: DDMM.MMMMMM (your data uses 2 digits, not 3!)
-                degrees = int(coord_str[:2])
-                minutes = float(coord_str[2:])
+            else:  # Longitude: DDDMM.MMMM  
+                degrees = int(coord_str[:3])
+                minutes = float(coord_str[3:])
             
             decimal_degrees = degrees + minutes / 60.0
             
