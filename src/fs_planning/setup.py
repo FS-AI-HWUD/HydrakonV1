@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'nmea_bridge = fs_planning.nmea_bridge:main',
+            'hydrakon_planning = fs_planning.hydrakon_planning:main',
         ],
     },
 )

@@ -13,7 +13,6 @@ class PIDAccelerationController(Node):
     - /planning/target_speed (Float64)
     - /planning/target_position (Point) - for future use with position control
     - /current_speed (Float64)
-    - /mission_complete (Bool)
     
     Publishes to: 
     - /acceleration_cmd (Float64) - in m/s²
@@ -52,9 +51,7 @@ class PIDAccelerationController(Node):
         self.target_position_sub = self.create_subscription(
             Point, '/planning/target_position', self.target_position_callback, 10)
         self.current_speed_sub = self.create_subscription(
-            Float64, '/current_speed', self.current_speed_callback, 10)
-        self.mission_complete_sub = self.create_subscription(
-            Bool, '/mission_complete', self.mission_complete_callback, 10)
+            Float64, '/hydrakon_can/wheel_speed', self.current_speed_callback, 10)
         
         # Publisher - ONLY acceleration command
         self.acceleration_pub = self.create_publisher(Float64, '/acceleration_cmd', 10)
@@ -63,7 +60,6 @@ class PIDAccelerationController(Node):
         self.target_speed = 0.0
         self.target_position = Point()  # For future position control
         self.current_speed = 0.0
-        self.mission_complete = False
         self.last_target_time = time.time()
         self.target_timeout = 2.0
         
@@ -98,23 +94,12 @@ class PIDAccelerationController(Node):
         """Receive current speed from speed processing node"""
         self.current_speed = msg.data
     
-    def mission_complete_callback(self, msg):
-        """Receive mission status"""
-        self.mission_complete = msg.data
-        if self.mission_complete:
-            self.get_logger().info("Mission complete - emergency stop")
-    
     def control_loop(self):
         """Main PID control loop - outputs acceleration command only"""
         try:
             current_time = time.time()
             dt = current_time - self.last_time
             dt = max(dt, 0.001)  # Prevent division by zero
-            
-            # Emergency stop conditions
-            if self.mission_complete:
-                self.emergency_stop()
-                return
             
             # Check timeout
             target_age = current_time - self.last_target_time
