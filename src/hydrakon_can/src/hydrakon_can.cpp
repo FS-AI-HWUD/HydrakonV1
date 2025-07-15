@@ -126,11 +126,32 @@ void HydrakonCanInterface::loop() {
       "Mission status: " + std::to_string(ai2vcu_data_.AI2VCU_MISSION_STATUS) + "\n";
   RCLCPP_DEBUG(get_logger(), "%s", msg_send.c_str());
 
+  if (driving_flag_) {
+  switch (vcu2ai_data_.VCU2AI_AMI_STATE) {
+    case fs_ai_api_ami_state_e::AMI_STATIC_INSPECTION_A:
+      handleStaticInspectionA();
+      break;
+    case fs_ai_api_ami_state_e::AMI_STATIC_INSPECTION_B:
+      handleStaticInspectionB();
+      break;
+    case fs_ai_api_ami_state_e::AMI_AUTONOMOUS_DEMO:
+      handleAutonomousDemo();
+      break;
+    default:
+      break;
+  }
+}
+
   // Send data to car
   fs_ai_api_ai2vcu_set_data(&ai2vcu_data_);
 
+  bool is_running_mission =
+    vcu2ai_data_.VCU2AI_AMI_STATE == fs_ai_api_ami_state_e::AMI_STATIC_INSPECTION_A ||
+    vcu2ai_data_.VCU2AI_AMI_STATE == fs_ai_api_ami_state_e::AMI_STATIC_INSPECTION_B ||
+    vcu2ai_data_.VCU2AI_AMI_STATE == fs_ai_api_ami_state_e::AMI_AUTONOMOUS_DEMO;
+
   // Only check timeout if driving_flag is true
-  if (driving_flag_) {
+  if (driving_flag_ && !is_running_mission) {
     checkTimeout();
   }
 }
@@ -478,11 +499,194 @@ int HydrakonCanInterface::checkAndTrunc(const int val, const int max_val, std::s
 void HydrakonCanInterface::checkTimeout() {
   // Engage EBS if the duration between last message time and now exceeds threshold
   if (this->now().seconds() - last_cmd_message_time_ > cmd_timeout_) {
-    RCLCPP_ERROR(get_logger(), "/hydrakon_can/cmd sent nothing for %f seconds, requesting EMERGENCY STOP",
+    RCLCPP_ERROR(get_logger(), "/hydrakon_can/command sent nothing for %f seconds, requesting EMERGENCY STOP",
                  cmd_timeout_);
     ebs_state_ = fs_ai_api_estop_request_e::ESTOP_YES;
   }
 }
+
+void HydrakonCanInterface::handleStaticInspectionA() {
+  if (!driving_flag_ || inspection_completed_) return;
+
+  auto now = this->now();
+  if (!inspection_started_) {
+    inspection_started_ = true;
+    inspection_stage_ = 0;
+    stage_start_time_ = inspection_start_time_ = now;
+    RCLCPP_INFO(get_logger(), "Static Inspection A mission started.");
+  }
+
+  double t = (now - stage_start_time_).seconds();
+  auto next = [&]() { inspection_stage_++; stage_start_time_ = now; };
+
+  switch (inspection_stage_) {
+    case 0: {  // Sweep from 0 to -24°
+      float target = -MAX_STEERING_ANGLE_DEG_;
+      float delta = t * STEERING_RAMP_RATE;
+      steering_ = std::max(target, 0.0f - delta);  // Ramp down
+      if (steering_ <= target) {
+        steering_ = target;
+        next();
+      }
+      break;
+    }
+
+    case 1: {  // Sweep -24° to +24°
+      float target = MAX_STEERING_ANGLE_DEG_;
+      float delta = (t * STEERING_RAMP_RATE);
+      steering_ = std::min(target, -MAX_STEERING_ANGLE_DEG_ + delta);  // Ramp up from -24 to +24
+      if (steering_ >= target) {
+        steering_ = target;
+        next();
+      }
+      break;
+    }
+
+    case 2: {  // Sweep from +24° back to 0°
+      float delta = t * STEERING_RAMP_RATE;
+      steering_ = std::max(0.0f, MAX_STEERING_ANGLE_DEG_ - delta);  // Ramp down from +24 to 0
+      if (steering_ <= 0.0f) {
+        steering_ = 0.0f;
+        next();
+      }
+      break;
+    }
+
+    case 3: {  // Ramp up to 200 RPM and torque in ≤10s
+      rpm_request_ = std::min(200.0f, static_cast<float>(t * RPM_RAMP_RATE));  // assume 20 rpm/sec
+      torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));     // assume 5 Nm/sec
+      braking_ = 0.0f;
+      if (rpm_request_ >= 200.0f || t >= 10.0) {
+        rpm_request_ = 200.0f;
+        torque_ = 50.0f;
+        next();
+      }
+      break;
+    }
+
+    case 4: {  // Stop within 5 seconds
+      rpm_request_ = 0.0f;
+      torque_ = 0.0f;
+      braking_ = 60.0f;
+      if (t >= 5.0) {
+        next();
+      }
+      break;
+    }
+
+    case 5: {  // Finish
+      as_state_ = fs_ai_api_as_state_e::AS_FINISHED;
+      inspection_completed_ = true;
+      RCLCPP_INFO(get_logger(), "Static Inspection A mission complete.");
+      break;
+    }
+  }
+
+  last_cmd_message_time_ = this->now().seconds();  // Prevent timeout
+}
+
+void HydrakonCanInterface::handleStaticInspectionB() {
+  if (!driving_flag_ || inspection_completed_) return;
+
+  auto now = this->now();
+  if (!inspection_started_) {
+    inspection_started_ = true;
+    inspection_stage_ = 0;
+    stage_start_time_ = inspection_start_time_ = now;
+    RCLCPP_INFO(get_logger(), "Static Inspection B mission started.");
+  }
+
+  double t = (now - stage_start_time_).seconds();
+  auto next = [&]() { inspection_stage_++; stage_start_time_ = now; };
+
+  switch (inspection_stage_) {
+    case 0: {  // Ramp to 50 RPM
+      rpm_request_ = std::min(50.0f, static_cast<float>(t * RPM_RAMP_RATE));
+      torque_ = std::min(10.0f, static_cast<float>(t * TORQUE_RAMP_RATE));
+      braking_ = 0.0f;
+      if (rpm_request_ >= 50.0f) next();
+      break;
+    }
+    case 1: {  // Trigger EBS and set AS to EMERGENCY
+      ebs_state_ = fs_ai_api_estop_request_e::ESTOP_YES;
+      as_state_ = fs_ai_api_as_state_e::AS_EMERGENCY_BRAKE;
+      inspection_completed_ = true;
+      RCLCPP_WARN(get_logger(), "Static Inspection B: EBS Triggered");
+      break;
+    }
+  }
+
+  last_cmd_message_time_ = this->now().seconds();
+}
+
+
+void HydrakonCanInterface::handleAutonomousDemo() {
+  if (!driving_flag_ || inspection_completed_) return;
+
+  auto now = this->now();
+  if (!inspection_started_) {
+    inspection_started_ = true;
+    inspection_stage_ = 0;
+    stage_start_time_ = inspection_start_time_ = now;
+    RCLCPP_INFO(get_logger(), "Autonomous Demo mission started.");
+  }
+
+  double t = (now - stage_start_time_).seconds();
+  auto next = [&]() { inspection_stage_++; stage_start_time_ = now; };
+
+  switch (inspection_stage_) {
+    case 0: {  // Sweep left
+      steering_ = -std::min(MAX_STEERING_ANGLE_DEG_, static_cast<float>(t * STEERING_RAMP_RATE));
+      if (steering_ <= -MAX_STEERING_ANGLE_DEG_) next();
+      break;
+    }
+    case 1: {  // Sweep right
+      steering_ = std::min(MAX_STEERING_ANGLE_DEG_, static_cast<float>(t * STEERING_RAMP_RATE));
+      if (steering_ >= MAX_STEERING_ANGLE_DEG_) next();
+      break;
+    }
+    case 2: {  // Return to center
+      float delta = std::min(static_cast<float>(STEERING_RAMP_RATE * t), std::abs(steering_));
+      steering_ += (steering_ > 0 ? -delta : delta);
+      if (std::abs(steering_) <= 0.1f) {
+        steering_ = 0.0f;
+        next();
+      }
+      break;
+    }
+    case 3: {  // Accelerate to 15kph (~1500 RPM) for 10m (~4s)
+      rpm_request_ = std::min(1500.0f, static_cast<float>(t * RPM_RAMP_RATE));
+      torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));
+      braking_ = 0.0f;
+      if (rpm_request_ >= 1500.0f || t >= 4.0) next();
+      break;
+    }
+    case 4: {  // Brake to stop (~3s)
+      rpm_request_ = 0.0f;
+      torque_ = 0.0f;
+      braking_ = 80.0f;
+      if (t >= 3.0) next();
+      break;
+    }
+    case 5: {  // Re-accelerate to 15kph again
+      rpm_request_ = std::min(1500.0f, static_cast<float>(t * RPM_RAMP_RATE));
+      torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));
+      braking_ = 0.0f;
+      if (rpm_request_ >= 1500.0f || t >= 4.0) next();
+      break;
+    }
+    case 6: {  // EBS deploy
+      ebs_state_ = fs_ai_api_estop_request_e::ESTOP_YES;
+      as_state_ = fs_ai_api_as_state_e::AS_EMERGENCY_BRAKE;
+      inspection_completed_ = true;
+      RCLCPP_WARN(get_logger(), "Autonomous Demo complete. EBS triggered.");
+      break;
+    }
+  }
+
+  last_cmd_message_time_ = this->now().seconds();
+}
+
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
