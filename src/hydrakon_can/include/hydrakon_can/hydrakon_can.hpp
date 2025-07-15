@@ -86,7 +86,12 @@ class HydrakonCanInterface : public rclcpp::Node {
   const float MAX_STEERING_ANGLE_DEG_ = 24;  // Max steering angle (degrees)
   const float WHEEL_RADIUS_ = 0.253;         // Radius of DDT car wheels
   const float WHEELBASE_ = 1.53;             // Wheelbase of the DDT car
-  const float TOTAL_MASS_ = 300;             // Total mass of the DDT car in kg
+  const float TOTAL_MASS_ = 300;            // Total mass of the DDT car in kg
+
+  // Parameters for inspection
+  const float STEERING_RAMP_RATE = 12.0;   // degrees per second
+  const float RPM_RAMP_RATE = 50.0;        // rpm per second
+  const float TORQUE_RAMP_RATE = 20.0;     // Nm per second
 
   // Variables
   float steering_ = 0;    // Desired steering
@@ -100,6 +105,18 @@ class HydrakonCanInterface : public rclcpp::Node {
 
   bool mission_complete_ = false;
   bool driving_flag_ = false;
+
+    // Mission handler methods
+  void handleStaticInspectionA();
+  void handleStaticInspectionB();
+  void handleAutonomousDemo();
+
+  // Mission control vars
+  bool inspection_started_ = false;
+  bool inspection_completed_ = false;
+  int inspection_stage_ = 0;
+  rclcpp::Time inspection_start_time_;
+  rclcpp::Time stage_start_time_;
 
   /**SS
    * Handles the handshake bits and returns the one to be sent back to the car

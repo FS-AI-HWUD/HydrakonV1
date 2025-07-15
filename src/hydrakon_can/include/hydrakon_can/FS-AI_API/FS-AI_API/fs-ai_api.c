@@ -658,6 +658,15 @@ void fs_ai_api_vcu2ai_get_data(fs_ai_api_vcu2ai *data) {
 			if(++VCU2AI_AS_STATE > AS_FINISHED) { VCU2AI_AS_STATE = AS_OFF; }
 			if(++VCU2AI_AMI_STATE > AMI_AUTONOMOUS_DEMO) { VCU2AI_AMI_STATE = AMI_NOT_SELECTED; }
 		}
+
+				// Force always AS_DRIVING
+		// VCU2AI_AS_STATE = AS_DRIVING;
+
+		// <<< Change this line to test one mission at a time >>>
+		// VCU2AI_AMI_STATE = AMI_STATIC_INSPECTION_A;
+		// VCU2AI_AMI_STATE = AMI_STATIC_INSPECTION_B;
+		// VCU2AI_AMI_STATE = AMI_AUTONOMOUS_DEMO; 
+		// VCU2AI_AMI_STATE = AMI_NOT_SELECTED;
 		
 		VCU2AI_STEER_ANGLE_MAX_raw = 272;
 		if(++VCU2AI_STEER_ANGLE_raw > VCU2AI_STEER_ANGLE_MAX_raw) {
