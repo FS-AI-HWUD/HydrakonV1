@@ -417,9 +417,9 @@ def generate_launch_description():
         planning_node,
         
         # Control System
-        speed_processor_node,
-        pid_controller_node,
-        vehicle_interface_node,
+        # speed_processor_node,
+        # pid_controller_node,
+        # vehicle_interface_node,
         
         # Transforms
         static_transform_map_to_base,

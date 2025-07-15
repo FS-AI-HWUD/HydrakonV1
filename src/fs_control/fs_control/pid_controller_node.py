@@ -51,7 +51,7 @@ class PIDAccelerationController(Node):
         self.target_position_sub = self.create_subscription(
             Point, '/planning/target_position', self.target_position_callback, 10)
         self.current_speed_sub = self.create_subscription(
-            Float64, '/hydrakon_can/wheel_speed', self.current_speed_callback, 10)
+            WheelSpeed, '/hydrakon_can/wheel_speed', self.current_speed_callback, 10)
         
         # Publisher - ONLY acceleration command
         self.acceleration_pub = self.create_publisher(Float64, '/acceleration_cmd', 10)
