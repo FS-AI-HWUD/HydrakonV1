@@ -22,7 +22,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'speed_processor = fs_control.speed_processor_node:main',
             'pid_controller = fs_control.pid_controller_node:main',
             'vehicle_interface = fs_control.vehicle_interface_node:main',
         ],

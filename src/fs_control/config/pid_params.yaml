@@ -6,7 +6,7 @@
     # Integral gain
     speed_ki: 0.3
     # Derivative gain
-    speed_kd: 0.1
+    speed_kd: 0.05
     # Integral windup limit
     speed_integral_limit: 3.0
     
@@ -15,23 +15,13 @@
     max_acceleration: 4.0
     # Max deceleration m/s²
     max_deceleration: -6.0
-    # Emergency brake m/s²
-    emergency_decel: -8.0
     
     # Speed and Timing
     # Speed limit m/s
     max_speed_limit: 15.0
     # Control loop Hz
-    control_frequency: 50.0
+    control_frequency: 20.0
     
-    # Vehicle Interface Parameters
-    # Control loop Hz for vehicle interface
-    vehicle_control_frequency: 50.0
-    
-    # Speed Processing Parameters
-    # # Real IMU topic name for ADS-DV
-    # imu_topic: '/imu/data'
-    # # Filter smoothing factor
-    # filter_alpha: 0.9
-    # # Gravity compensation
-    # gravity_compensation: true
+    # Wheel Parameters
+    # Wheel radius for RPM to m/s conversion
+    wheel_radius: 0.253

@@ -1,6 +1,6 @@
 """
 Hydrakon Formula Student Launch File
-Enhanced with Robosense LiDAR Integration and FS Control Module
+Enhanced with Robosense LiDAR Integration, FS Control Module, and Planning Node
 """
 
 from launch import LaunchDescription
@@ -91,6 +91,49 @@ def generate_launch_description():
         description='Enable FS Control Module'
     )
     
+    # NEW: Planning node arguments
+    enable_planning_arg = DeclareLaunchArgument(
+        'enable_planning',
+        default_value='true',
+        description='Enable Hydrakon Planning Node'
+    )
+    
+    target_laps_arg = DeclareLaunchArgument(
+        'target_laps',
+        default_value='10',
+        description='Target number of laps (set to 0 for unlimited)'
+    )
+    
+    min_lap_time_arg = DeclareLaunchArgument(
+        'min_lap_time',
+        default_value='150.0',
+        description='Minimum lap time in seconds for valid lap counting'
+    )
+    
+    min_speed_arg = DeclareLaunchArgument(
+        'min_speed',
+        default_value='2.0',
+        description='Minimum vehicle speed in m/s'
+    )
+    
+    max_speed_arg = DeclareLaunchArgument(
+        'max_speed',
+        default_value='3.0',
+        description='Maximum vehicle speed in m/s'
+    )
+    
+    orange_gate_threshold_arg = DeclareLaunchArgument(
+        'orange_gate_threshold',
+        default_value='2.0',
+        description='Distance threshold for orange gate passage in meters'
+    )
+    
+    orange_cooldown_arg = DeclareLaunchArgument(
+        'orange_cooldown',
+        default_value='3.0',
+        description='Cooldown between orange gate detections in seconds'
+    )
+    
     model_path = LaunchConfiguration('model_path')
     lidar_config_path = LaunchConfiguration('lidar_config_path')
     foxglove_port = LaunchConfiguration('foxglove_port')
@@ -140,21 +183,29 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_gps'))
     )
     
+    # === PLANNING NODE ===
+    
+    planning_node = Node(
+        package='fs_planning',
+        executable='hydrakon_planning',
+        name='hydrakon_planning_node',
+        output='screen',
+        parameters=[{
+            'target_laps': LaunchConfiguration('target_laps'),
+            'min_lap_time': LaunchConfiguration('min_lap_time'),
+            'min_speed': LaunchConfiguration('min_speed'),
+            'max_speed': LaunchConfiguration('max_speed'),
+            'orange_gate_threshold': LaunchConfiguration('orange_gate_threshold'),
+            'orange_cooldown': LaunchConfiguration('orange_cooldown'),
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_planning'))
+    )
+    
     # === FS CONTROL MODULE ===
     
     # Get control module directory for config
     control_pkg_dir = FindPackageShare('fs_control')
     pid_config = PathJoinSubstitution([control_pkg_dir, 'config', 'pid_params.yaml'])
-    
-    # Speed Processor Node
-    speed_processor_node = Node(
-        package='fs_control',
-        executable='speed_processor',
-        name='speed_processor',
-        output='screen',
-        parameters=[pid_config],
-        condition=IfCondition(LaunchConfiguration('enable_control'))
-    )
     
     # PID Controller Node
     pid_controller_node = Node(
@@ -194,6 +245,7 @@ def generate_launch_description():
             'topic_whitelist': [
                 '/zed2i/detections_data',
                 '/zed2i/cone_detections',
+                '/zed2i/raw_feed',
                 '/lidar/points',
                 '/perception/lidar_cluster',
                 '/perception/cone_markers',
@@ -203,12 +255,13 @@ def generate_launch_description():
                 '/ins/velocity',
                 '/tf',
                 '/tf_static',
-                # Control topics
                 '/acceleration_cmd',
                 '/planning/reference_steering',
                 '/hydrakon_can/command',
                 '/current_speed',
-                '/imu/data'
+                '/imu/data',
+                '/cmd_vel',
+                '/planning_stats'
             ],
         }],
         condition=IfCondition(LaunchConfiguration('enable_foxglove'))
@@ -301,8 +354,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_control'))
     )
     
+    planning_info_process = ExecuteProcess(
+        cmd=['bash', '-c', 'echo "Planning: Pure Pursuit + Lap Counter → /cmd_vel"'],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_planning'))
+    )
+    
     network_info_process = ExecuteProcess(
-        cmd=['bash', '-c', 'echo "Systems Active: LiDAR, Camera, GPS/INS, Control, Foxglove"'],
+        cmd=['bash', '-c', 'echo "Systems Active: LiDAR, Camera, GPS/INS, Planning, Control, Foxglove"'],
         output='screen'
     )
     
@@ -320,37 +379,48 @@ def generate_launch_description():
         enable_rviz_arg,
         enable_gps_arg,
         enable_control_arg,
+        enable_planning_arg,
+        target_laps_arg,
+        min_lap_time_arg,
+        min_speed_arg,
+        max_speed_arg,
+        orange_gate_threshold_arg,
+        orange_cooldown_arg,
         
-        LogInfo(msg="HYDRAKON FS-AI SYSTEM"),
+        LogInfo(msg="HYDRAKON FS-AI SYSTEM WITH PLANNING"),
         LogInfo(msg="=" * 60),
         get_ip_process,
         lidar_info_process,
         gps_info_process,
         control_info_process,
+        planning_info_process,
         network_info_process,
         LogInfo(msg="=" * 60),
         
         # Perception
-        camera_detection_node,
-        lidar_node,
-        lidar_cluster_node,
-        nmea_gps_bridge_node,
+        # camera_detection_node,
+        # lidar_node,
+        # lidar_cluster_node,
+        # nmea_gps_bridge_node,
+        
+        # Planning
+        planning_node,
         
         # Control System
-        speed_processor_node,
-        pid_controller_node,
-        vehicle_interface_node,
+        # speed_processor_node,
+        # pid_controller_node,
+        # vehicle_interface_node,
         
         # Transforms
-        static_transform_map_to_base,
-        static_transform_base_to_lidar,
-        static_transform_base_to_camera,
-        static_transform_base_to_gps,
+        # static_transform_map_to_base,
+        # static_transform_base_to_lidar,
+        # static_transform_base_to_camera,
+        # static_transform_base_to_gps,
         
         # Visualization
-        foxglove_bridge_node,
-        rosbridge_server_node,
-        rviz_node,
+        # foxglove_bridge_node,
+        # rosbridge_server_node,
+        # rviz_node,
         
         LogInfo(msg="✅ All systems online!"),
     ])
