@@ -506,7 +506,10 @@ void HydrakonCanInterface::checkTimeout() {
 }
 
 void HydrakonCanInterface::handleStaticInspectionA() {
-  driving_flag_ = true;  
+  
+  // driving_flag_ = true; 
+  if (go_state = fs_ai_api_res_go_signal_bit_e::RES_GO_SIGNAL_GO) {
+  // driving_flag_ = true;\
   if (!driving_flag_ || inspection_completed_) return;
 
   auto now = this->now();
@@ -642,9 +645,14 @@ break;
 
   last_cmd_message_time_ = this->now().seconds();  // Prevent timeout
 }
+  }
+  
+  
 
 void HydrakonCanInterface::handleStaticInspectionB() {
-  driving_flag_ = true;
+
+  if (go_state = fs_ai_api_res_go_signal_bit_e::RES_GO_SIGNAL_GO) {
+      // driving_flag_ = true;
   if (!driving_flag_ || inspection_completed_) return;
 
   auto now = this->now();
@@ -700,10 +708,14 @@ void HydrakonCanInterface::handleStaticInspectionB() {
 
   last_cmd_message_time_ = this->now().seconds();
 }
+  }
+
 
 
 void HydrakonCanInterface::handleAutonomousDemo() {
-  if (!driving_flag_ || inspection_completed_) return;
+
+  if (go_state = fs_ai_api_res_go_signal_bit_e::RES_GO_SIGNAL_GO) {
+     if (!driving_flag_ || inspection_completed_) return;
 
   auto now = this->now();
   if (!inspection_started_) {
@@ -768,6 +780,9 @@ void HydrakonCanInterface::handleAutonomousDemo() {
 
   last_cmd_message_time_ = this->now().seconds();
 }
+  }
+   
+  
 
 
 int main(int argc, char **argv) {
