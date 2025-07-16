@@ -127,6 +127,7 @@ void HydrakonCanInterface::loop() {
   RCLCPP_DEBUG(get_logger(), "%s", msg_send.c_str());
 
   
+  if (driving_flag_) {
   switch (vcu2ai_data_.VCU2AI_AMI_STATE) {
     case fs_ai_api_ami_state_e::AMI_STATIC_INSPECTION_A:
       handleStaticInspectionA();
@@ -140,6 +141,7 @@ void HydrakonCanInterface::loop() {
     default:
       break;
   }
+}
 
 
   // Send data to car
