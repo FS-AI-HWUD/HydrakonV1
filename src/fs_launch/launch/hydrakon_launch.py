@@ -408,10 +408,10 @@ def generate_launch_description():
         LogInfo(msg="=" * 60),
         
         # Perception
-        camera_detection_node,
-        lidar_node,
-        lidar_cluster_node,
-        nmea_gps_bridge_node,
+        # camera_detection_node,
+        # lidar_node,
+        # lidar_cluster_node,
+        # nmea_gps_bridge_node,
         
         # Planning
         planning_node,
@@ -422,15 +422,15 @@ def generate_launch_description():
         # vehicle_interface_node,
         
         # Transforms
-        static_transform_map_to_base,
-        static_transform_base_to_lidar,
-        static_transform_base_to_camera,
-        static_transform_base_to_gps,
+        # static_transform_map_to_base,
+        # static_transform_base_to_lidar,
+        # static_transform_base_to_camera,
+        # static_transform_base_to_gps,
         
         # Visualization
-        foxglove_bridge_node,
-        rosbridge_server_node,
-        rviz_node,
+        # foxglove_bridge_node,
+        # rosbridge_server_node,
+        # rviz_node,
         
         LogInfo(msg="✅ All systems online!"),
     ])
