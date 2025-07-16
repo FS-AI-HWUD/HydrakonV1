@@ -207,16 +207,6 @@ def generate_launch_description():
     control_pkg_dir = FindPackageShare('fs_control')
     pid_config = PathJoinSubstitution([control_pkg_dir, 'config', 'pid_params.yaml'])
     
-    # Speed Processor Node
-    speed_processor_node = Node(
-        package='fs_control',
-        executable='speed_processor',
-        name='speed_processor',
-        output='screen',
-        parameters=[pid_config],
-        condition=IfCondition(LaunchConfiguration('enable_control'))
-    )
-    
     # PID Controller Node
     pid_controller_node = Node(
         package='fs_control',

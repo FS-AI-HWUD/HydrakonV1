@@ -11,15 +11,6 @@ def generate_launch_description():
     pid_config = PathJoinSubstitution([control_pkg_dir, 'config', 'pid_params.yaml'])
     
     return LaunchDescription([
-        # Speed Processor Node
-        Node(
-            package='fs_control',
-            executable='speed_processor',
-            name='speed_processor',
-            output='screen',
-            parameters=[pid_config]
-        ),
-        
         # PID Controller Node
         Node(
             package='fs_control',

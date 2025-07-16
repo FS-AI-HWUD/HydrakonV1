@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64, Bool
-from geometry_msgs.msg import Point
+from std_msgs.msg import Float64
+from hydrakon_can.msg import WheelSpeed  # Import your custom message
 import numpy as np
 import time
 
@@ -11,8 +11,7 @@ class PIDAccelerationController(Node):
     
     Subscribes to: 
     - /planning/target_speed (Float64)
-    - /planning/target_position (Point) - for future use with position control
-    - /current_speed (Float64)
+    - /hydrakon_can/wheel_speed (WheelSpeed) - custom message with wheel RPMs
     
     Publishes to: 
     - /acceleration_cmd (Float64) - in m/s²
@@ -30,8 +29,10 @@ class PIDAccelerationController(Node):
         self.declare_parameter('max_acceleration', 4.0)      # Max acceleration m/s²
         self.declare_parameter('max_deceleration', -6.0)     # Max deceleration m/s²
         self.declare_parameter('control_frequency', 50.0)    # Control loop frequency Hz
-        self.declare_parameter('emergency_decel', -8.0)      # Emergency brake deceleration
         self.declare_parameter('max_speed_limit', 15.0)      # Maximum allowed speed m/s
+        
+        # Wheel radius parameter for RPM to m/s conversion
+        self.declare_parameter('wheel_radius', 0.253)         # Wheel radius in meters
         
         # Get parameters
         self.speed_kp = self.get_parameter('speed_kp').value
@@ -42,14 +43,13 @@ class PIDAccelerationController(Node):
         self.max_accel = self.get_parameter('max_acceleration').value
         self.max_decel = self.get_parameter('max_deceleration').value
         self.control_freq = self.get_parameter('control_frequency').value
-        self.emergency_decel = self.get_parameter('emergency_decel').value
         self.max_speed = self.get_parameter('max_speed_limit').value
+        
+        self.wheel_radius = self.get_parameter('wheel_radius').value
         
         # Subscribers
         self.target_speed_sub = self.create_subscription(
             Float64, '/planning/target_speed', self.target_speed_callback, 10)
-        self.target_position_sub = self.create_subscription(
-            Point, '/planning/target_position', self.target_position_callback, 10)
         self.current_speed_sub = self.create_subscription(
             WheelSpeed, '/hydrakon_can/wheel_speed', self.current_speed_callback, 10)
         
@@ -58,7 +58,6 @@ class PIDAccelerationController(Node):
         
         # Control state
         self.target_speed = 0.0
-        self.target_position = Point()  # For future position control
         self.current_speed = 0.0
         self.last_target_time = time.time()
         self.target_timeout = 2.0
@@ -75,6 +74,7 @@ class PIDAccelerationController(Node):
         self.get_logger().info(f"Speed PID: Kp={self.speed_kp}, Ki={self.speed_ki}, Kd={self.speed_kd}")
         self.get_logger().info(f"Max acceleration: {self.max_accel} m/s², Max deceleration: {self.max_decel} m/s²")
         self.get_logger().info(f"Control frequency: {self.control_freq} Hz")
+        self.get_logger().info(f"Wheel radius: {self.wheel_radius} m")
     
     def target_speed_callback(self, msg):
         """Receive target speed from planning module"""
@@ -85,14 +85,16 @@ class PIDAccelerationController(Node):
         if abs(raw_speed - self.target_speed) > 0.1:
             self.get_logger().debug(f"Target speed limited: {raw_speed:.2f} -> {self.target_speed:.2f} m/s")
     
-    def target_position_callback(self, msg):
-        """Receive target position from planning module (for future use)"""
-        self.target_position = msg
-        # TODO: Implement position-based control in future versions
-    
     def current_speed_callback(self, msg):
-        """Receive current speed from speed processing node"""
-        self.current_speed = msg.data
+        """Receive current wheel speeds and calculate vehicle speed"""
+        # Calculate average wheel speed from all four wheels
+        avg_rpm = (msg.lf_speed + msg.rf_speed + msg.lb_speed + msg.rb_speed) / 4.0
+        
+        # Convert RPM to m/s
+        # RPM to rad/s: RPM * (2π/60)
+        # rad/s to m/s: rad/s * wheel_radius
+        avg_rad_per_sec = avg_rpm * (2.0 * np.pi / 60.0)
+        self.current_speed = avg_rad_per_sec * self.wheel_radius
     
     def control_loop(self):
         """Main PID control loop - outputs acceleration command only"""
@@ -104,8 +106,8 @@ class PIDAccelerationController(Node):
             # Check timeout
             target_age = current_time - self.last_target_time
             if target_age > self.target_timeout:
-                self.get_logger().warn(f"Target timeout ({target_age:.1f}s)! Emergency stop.")
-                self.emergency_stop()
+                self.get_logger().warn(f"Target timeout ({target_age:.1f}s)! Setting acceleration to 0.")
+                self.publish_acceleration_command(0.0)
                 return
             
             # Calculate speed error
@@ -128,7 +130,7 @@ class PIDAccelerationController(Node):
             
         except Exception as e:
             self.get_logger().error(f"Control loop error: {e}")
-            self.emergency_stop()
+            self.publish_acceleration_command(0.0)
     
     def speed_pid_update(self, error, dt):
         """PID controller for speed -> acceleration"""
@@ -168,18 +170,6 @@ class PIDAccelerationController(Node):
         )
         
         self.get_logger().info(log_msg)
-    
-    def emergency_stop(self):
-        """Emergency stop - maximum deceleration"""
-        accel_msg = Float64()
-        accel_msg.data = float(self.emergency_decel)  # Maximum deceleration
-        self.acceleration_pub.publish(accel_msg)
-        
-        # Reset PID state
-        self.speed_integral = 0.0
-        self.speed_prev_error = 0.0
-        
-        self.get_logger().warn(f"🚨 EMERGENCY STOP - Deceleration: {self.emergency_decel} m/s²")
 
 
 def main(args=None):
