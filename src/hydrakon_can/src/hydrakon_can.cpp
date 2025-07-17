@@ -511,7 +511,7 @@ void HydrakonCanInterface::handleStaticInspectionA() {
   
   // driving_flag_ = true; 
   if (go_state = fs_ai_api_res_go_signal_bit_e::RES_GO_SIGNAL_GO) {
-  // driving_flag_ = true;\
+  // driving_flag_ = true;
   if (!driving_flag_ || inspection_completed_) return;
 
   auto now = this->now();
