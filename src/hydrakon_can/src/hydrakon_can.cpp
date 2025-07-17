@@ -886,7 +886,7 @@ void HydrakonCanInterface::handleAutonomousDemo() {
 
 // Compute acceleration needed to reach 50 RPM in 3s
 
-float acceleration = (5.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
+float acceleration = (10.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
 
 float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
 
@@ -920,7 +920,7 @@ this->commandCallback(msg);
 
 // 🔧 Force RPM to exactly 50
 
-rpm_request_ = 200.0f;
+rpm_request_ = 500.0f;
 
 
 
@@ -930,7 +930,7 @@ ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION
 
 
 
-if (t >= 3.0) {
+if (t >= 5.0) {
 
   next();
 
@@ -1000,59 +1000,87 @@ break;
 
 }
   
-   case 5: {
+    case 5: {  // Ramp up to 200 RPM and torque in ≤10s
 
-  float acceleration = (5.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
+      // rpm_request_ = std::min(200.0f, static_cast<float>(t * RPM_RAMP_RATE));  // assume 20 rpm/sec
 
-  float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
+      // torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));     // assume 5 Nm/sec
 
+      // braking_ = 0.0f;
 
+      // if (rpm_request_ >= 200.0f || t >= 10.0) {
 
-  auto msg = std::make_shared<ackermann_msgs::msg::AckermannDriveStamped>();
+      //   rpm_request_ = 200.0f;
 
-  msg->header.stamp = this->now();
+      //   torque_ = 50.0f;
 
-  msg->header.frame_id = "";
+      //   next();
 
-  msg->drive.steering_angle = steering_ * M_PI / 180.0f;
+      // }
 
-  msg->drive.acceleration = smooth_acc;
-
-  msg->drive.speed = 0.0f;
-
-  msg->drive.steering_angle_velocity = 0.0f;
-
-  msg->drive.jerk = 0.0f;
+      // break;braking_ = 0.0f;
 
 
 
-  this->commandCallback(msg);
+// Compute acceleration needed to reach 50 RPM in 3s
+
+float acceleration = (10.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
+
+float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
 
 
 
-  rpm_request_ = std::min(50.0f, static_cast<float>(t * RPM_RAMP_RATE));
+// Construct an Ackermann message
+
+auto msg = std::make_shared<ackermann_msgs::msg::AckermannDriveStamped>();
+
+msg->header.stamp = this->now();
+
+msg->header.frame_id = "";
+
+msg->drive.steering_angle = steering_ * M_PI / 180.0f;
+
+msg->drive.acceleration = smooth_acc;
+
+msg->drive.speed = 0.0f;
+
+msg->drive.steering_angle_velocity = 0.0f;
+
+msg->drive.jerk = 0.0f;
 
 
 
-  // ✅ Compute torque from acceleration
+// 🔁 Reuse your existing logic to compute torque/brake/rpm
 
-  torque_ = TOTAL_MASS_ * smooth_acc * WHEEL_RADIUS_;
-
-
-
-  ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION_FORWARD;
+this->commandCallback(msg);
 
 
 
-  if (t >= 3.0) {
+// 🔧 Force RPM to exactly 50
 
-    next();
+rpm_request_ = 600.0f;
 
-  }
 
-  break;
+
+// 🔧 Force direction to FORWARD regardless of AS_STATE
+
+ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION_FORWARD;
+
+
+
+if (t >= 5.0) {
+
+  next();
 
 }
+
+break;
+
+
+
+    }
+
+
     case 6: {  // Trigger EBS and set AS to EMERGENCY
       ebs_state_ = fs_ai_api_estop_request_e::ESTOP_YES;
       as_state_ = fs_ai_api_as_state_e::AS_EMERGENCY_BRAKE;
