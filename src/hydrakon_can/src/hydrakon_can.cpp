@@ -126,7 +126,6 @@ void HydrakonCanInterface::loop() {
       "Mission status: " + std::to_string(ai2vcu_data_.AI2VCU_MISSION_STATUS) + "\n";
   RCLCPP_DEBUG(get_logger(), "%s", msg_send.c_str());
 
-  
   if (driving_flag_) {
   switch (vcu2ai_data_.VCU2AI_AMI_STATE) {
     case fs_ai_api_ami_state_e::AMI_STATIC_INSPECTION_A:
@@ -142,7 +141,6 @@ void HydrakonCanInterface::loop() {
       break;
   }
 }
-
 
   // Send data to car
   fs_ai_api_ai2vcu_set_data(&ai2vcu_data_);
@@ -508,10 +506,6 @@ void HydrakonCanInterface::checkTimeout() {
 }
 
 void HydrakonCanInterface::handleStaticInspectionA() {
-  
-  // driving_flag_ = true; 
-  if (go_state = fs_ai_api_res_go_signal_bit_e::RES_GO_SIGNAL_GO) {
-  // driving_flag_ = true;
   if (!driving_flag_ || inspection_completed_) return;
 
   auto now = this->now();
@@ -559,85 +553,28 @@ void HydrakonCanInterface::handleStaticInspectionA() {
     }
 
     case 3: {  // Ramp up to 200 RPM and torque in ≤10s
-      // rpm_request_ = std::min(200.0f, static_cast<float>(t * RPM_RAMP_RATE));  // assume 20 rpm/sec
-      // torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));     // assume 5 Nm/sec
-      // braking_ = 0.0f;
-      // if (rpm_request_ >= 200.0f || t >= 10.0) {
-      //   rpm_request_ = 200.0f;
-      //   torque_ = 50.0f;
-      //   next();
-      // }
-      // break;braking_ = 0.0f;
-
-// Compute acceleration needed to reach 50 RPM in 3s
-float acceleration = (5.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
-float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
-
-// Construct an Ackermann message
-auto msg = std::make_shared<ackermann_msgs::msg::AckermannDriveStamped>();
-msg->header.stamp = this->now();
-msg->header.frame_id = "";
-msg->drive.steering_angle = steering_ * M_PI / 180.0f;
-msg->drive.acceleration = smooth_acc;
-msg->drive.speed = 0.0f;
-msg->drive.steering_angle_velocity = 0.0f;
-msg->drive.jerk = 0.0f;
-
-// 🔁 Reuse your existing logic to compute torque/brake/rpm
-this->commandCallback(msg);
-
-// 🔧 Force RPM to exactly 50
-rpm_request_ = 200.0f;
-
-// 🔧 Force direction to FORWARD regardless of AS_STATE
-ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION_FORWARD;
-
-if (t >= 3.0) {
-  next();
-}
-break;
-
+      rpm_request_ = std::min(200.0f, static_cast<float>(t * RPM_RAMP_RATE));  // assume 20 rpm/sec
+      torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));     // assume 5 Nm/sec
+      braking_ = 0.0f;
+      if (rpm_request_ >= 200.0f || t >= 10.0) {
+        rpm_request_ = 200.0f;
+        torque_ = 50.0f;
+        next();
+      }
+      break;
     }
 
-   case 4: {
-  float acceleration = (5.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
-  float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
-
-  auto msg = std::make_shared<ackermann_msgs::msg::AckermannDriveStamped>();
-  msg->header.stamp = this->now();
-  msg->header.frame_id = "";
-  msg->drive.steering_angle = steering_ * M_PI / 180.0f;
-  msg->drive.acceleration = smooth_acc;
-  msg->drive.speed = 0.0f;
-  msg->drive.steering_angle_velocity = 0.0f;
-  msg->drive.jerk = 0.0f;
-
-  this->commandCallback(msg);
-
-  // 🚨 Full brake, disable torque and RPM
-  rpm_request_ = 0.0f;
-  torque_ = 0.0f;
-  braking_ = 60.0f;
-
-  ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION_FORWARD;
-  ai2vcu_data_.AI2VCU_AXLE_TORQUE_REQUEST_Nm = 0.0f;
-
-  if (t >= 5.0) {
-    next();
-  }
-  break;
-}
-
-
+    case 4: {  // Stop within 5 seconds
+      rpm_request_ = 0.0f;
+      torque_ = 0.0f;
+      braking_ = 60.0f;
+      if (t >= 5.0) {
+        next();
+      }
+      break;
+    }
 
     case 5: {  // Finish
-      
-
-      // 🔁 Simulate: ros2 topic pub /hydrakon_can/is_mission_completed std_msgs/msg/Bool "{data: true}"
-      auto msg = std::make_shared<std_msgs::msg::Bool>();
-      msg->data = true;
-      flagCallback(msg);
-
       as_state_ = fs_ai_api_as_state_e::AS_FINISHED;
       inspection_completed_ = true;
       RCLCPP_INFO(get_logger(), "Static Inspection A mission complete.");
@@ -647,14 +584,8 @@ break;
 
   last_cmd_message_time_ = this->now().seconds();  // Prevent timeout
 }
-  }
-  
-  
 
 void HydrakonCanInterface::handleStaticInspectionB() {
-
-  if (go_state = fs_ai_api_res_go_signal_bit_e::RES_GO_SIGNAL_GO) {
-      // driving_flag_ = true;
   if (!driving_flag_ || inspection_completed_) return;
 
   auto now = this->now();
@@ -669,36 +600,13 @@ void HydrakonCanInterface::handleStaticInspectionB() {
   auto next = [&]() { inspection_stage_++; stage_start_time_ = now; };
 
   switch (inspection_stage_) {
-    case 0: {
-  float acceleration = (5.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
-  float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
-
-  auto msg = std::make_shared<ackermann_msgs::msg::AckermannDriveStamped>();
-  msg->header.stamp = this->now();
-  msg->header.frame_id = "";
-  msg->drive.steering_angle = steering_ * M_PI / 180.0f;
-  msg->drive.acceleration = smooth_acc;
-  msg->drive.speed = 0.0f;
-  msg->drive.steering_angle_velocity = 0.0f;
-  msg->drive.jerk = 0.0f;
-
-  this->commandCallback(msg);
-
-  rpm_request_ = std::min(50.0f, static_cast<float>(t * RPM_RAMP_RATE));
-
-  // ✅ Compute torque from acceleration
-  torque_ = TOTAL_MASS_ * smooth_acc * WHEEL_RADIUS_;
-
-  ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION_FORWARD;
-
-  if (t >= 3.0) {
-    next();
-  }
-  break;
-}
-
-
-
+    case 0: {  // Ramp to 50 RPM
+      rpm_request_ = std::min(50.0f, static_cast<float>(t * RPM_RAMP_RATE));
+      torque_ = std::min(10.0f, static_cast<float>(t * TORQUE_RAMP_RATE));
+      braking_ = 0.0f;
+      if (rpm_request_ >= 50.0f) next();
+      break;
+    }
     case 1: {  // Trigger EBS and set AS to EMERGENCY
       ebs_state_ = fs_ai_api_estop_request_e::ESTOP_YES;
       as_state_ = fs_ai_api_as_state_e::AS_EMERGENCY_BRAKE;
@@ -710,14 +618,10 @@ void HydrakonCanInterface::handleStaticInspectionB() {
 
   last_cmd_message_time_ = this->now().seconds();
 }
-  }
-
 
 
 void HydrakonCanInterface::handleAutonomousDemo() {
-
-  if (go_state = fs_ai_api_res_go_signal_bit_e::RES_GO_SIGNAL_GO) {
-     if (!driving_flag_ || inspection_completed_) return;
+  if (!driving_flag_ || inspection_completed_) return;
 
   auto now = this->now();
   if (!inspection_started_) {
@@ -782,9 +686,6 @@ void HydrakonCanInterface::handleAutonomousDemo() {
 
   last_cmd_message_time_ = this->now().seconds();
 }
-  }
-   
-  
 
 
 int main(int argc, char **argv) {

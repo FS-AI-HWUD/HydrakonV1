@@ -74,7 +74,6 @@ class HydrakonCanInterface : public rclcpp::Node {
   fs_ai_api_mission_status_e mission_status_ = fs_ai_api_mission_status_e::MISSION_NOT_SELECTED;
   fs_ai_api_estop_request_e ebs_state_ = fs_ai_api_estop_request_e::ESTOP_NO;
   fs_ai_api_as_state_e as_state_ = fs_ai_api_as_state_e::AS_OFF;
-  fs_ai_api_res_go_signal_bit_e go_state = fs_ai_api_res_go_signal_bit_e::RES_GO_SIGNAL_NO_GO;
 
   // Parameters
   std::string can_interface_ = "can0";
