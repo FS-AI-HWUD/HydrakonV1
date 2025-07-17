@@ -1058,7 +1058,7 @@ this->commandCallback(msg);
 
 // 🔧 Force RPM to exactly 50
 
-rpm_request_ = 1000.0f;
+rpm_request_ = 500.0f;
 
 
 
