@@ -930,7 +930,7 @@ ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION
 
 
 
-if (t >= 5.0) {
+if (t >= 7.5) {
 
   next();
 
@@ -1068,7 +1068,7 @@ ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION
 
 
 
-if (t >= 5.0) {
+if (t >= 7.5) {
 
   next();
 
