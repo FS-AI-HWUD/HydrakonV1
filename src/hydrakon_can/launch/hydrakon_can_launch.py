@@ -7,7 +7,7 @@ def generate_launch_description():
         executable="hydrakon_can_node",
         name="hydrakon_can",
         parameters=[
-            {"use_sim_time": True},
+            {"use_sim_time": False},
             {"can_debug": 1},
             {"simulate_can": 0},
             {"can_interface": "can2"},
