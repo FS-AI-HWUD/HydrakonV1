@@ -664,8 +664,8 @@ void fs_ai_api_vcu2ai_get_data(fs_ai_api_vcu2ai *data) {
 
 		// <<< Change this line to test one mission at a time >>>
 		// VCU2AI_AMI_STATE = AMI_STATIC_INSPECTION_A;
-		VCU2AI_AMI_STATE = AMI_STATIC_INSPECTION_B;
-		// VCU2AI_AMI_STATE = AMI_AUTONOMOUS_DEMO; 
+		// VCU2AI_AMI_STATE = AMI_STATIC_INSPECTION_B;
+		VCU2AI_AMI_STATE = AMI_AUTONOMOUS_DEMO; 
 		// VCU2AI_AMI_STATE = AMI_NOT_SELECTED;
 		
 		VCU2AI_STEER_ANGLE_MAX_raw = 272;

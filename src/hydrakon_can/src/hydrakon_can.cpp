@@ -828,264 +828,51 @@ void HydrakonCanInterface::handleAutonomousDemo() {
   auto next = [&]() { inspection_stage_++; stage_start_time_ = now; };
 
   switch (inspection_stage_) {
-    case 0: {  // Sweep from 0 to -24°
-      float target = -MAX_STEERING_ANGLE_DEG_;
-      float delta = t * STEERING_RAMP_RATE;
-      steering_ = std::max(target, 0.0f - delta);  // Ramp down
-      if (steering_ <= target) {
-        steering_ = target;
-        next();
-      }
+    case 0: {  // Sweep left
+      steering_ = -std::min(MAX_STEERING_ANGLE_DEG_, static_cast<float>(t * STEERING_RAMP_RATE));
+      if (steering_ <= -MAX_STEERING_ANGLE_DEG_) next();
       break;
     }
-
-    case 1: {  // Sweep -24° to +24°
-      float target = MAX_STEERING_ANGLE_DEG_;
-      float delta = (t * STEERING_RAMP_RATE);
-      steering_ = std::min(target, -MAX_STEERING_ANGLE_DEG_ + delta);  // Ramp up from -24 to +24
-      if (steering_ >= target) {
-        steering_ = target;
-        next();
-      }
+    case 1: {  // Sweep right
+      steering_ = std::min(MAX_STEERING_ANGLE_DEG_, static_cast<float>(t * STEERING_RAMP_RATE));
+      if (steering_ >= MAX_STEERING_ANGLE_DEG_) next();
       break;
     }
-
-    case 2: {  // Sweep from +24° back to 0°
-      float delta = t * STEERING_RAMP_RATE;
-      steering_ = std::max(0.0f, MAX_STEERING_ANGLE_DEG_ - delta);  // Ramp down from +24 to 0
-      if (steering_ <= 0.0f) {
+    case 2: {  // Return to center
+      float delta = std::min(static_cast<float>(STEERING_RAMP_RATE * t), std::abs(steering_));
+      steering_ += (steering_ > 0 ? -delta : delta);
+      if (std::abs(steering_) <= 0.1f) {
         steering_ = 0.0f;
         next();
       }
       break;
     }
-
-    
-
-    case 3: {  // Ramp up to 200 RPM and torque in ≤10s
-
-      // rpm_request_ = std::min(200.0f, static_cast<float>(t * RPM_RAMP_RATE));  // assume 20 rpm/sec
-
-      // torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));     // assume 5 Nm/sec
-
-      // braking_ = 0.0f;
-
-      // if (rpm_request_ >= 200.0f || t >= 10.0) {
-
-      //   rpm_request_ = 200.0f;
-
-      //   torque_ = 50.0f;
-
-      //   next();
-
-      // }
-
-      // break;braking_ = 0.0f;
-
-
-
-// Compute acceleration needed to reach 50 RPM in 3s
-
-float acceleration = (10.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
-
-float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
-
-
-
-// Construct an Ackermann message
-
-auto msg = std::make_shared<ackermann_msgs::msg::AckermannDriveStamped>();
-
-msg->header.stamp = this->now();
-
-msg->header.frame_id = "";
-
-msg->drive.steering_angle = steering_ * M_PI / 180.0f;
-
-msg->drive.acceleration = smooth_acc;
-
-msg->drive.speed = 0.0f;
-
-msg->drive.steering_angle_velocity = 0.0f;
-
-msg->drive.jerk = 0.0f;
-
-
-
-// 🔁 Reuse your existing logic to compute torque/brake/rpm
-
-this->commandCallback(msg);
-
-
-
-// 🔧 Force RPM to exactly 50
-
-rpm_request_ = 500.0f;
-
-
-
-// 🔧 Force direction to FORWARD regardless of AS_STATE
-
-ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION_FORWARD;
-
-
-
-if (t >= 7.5) {
-
-  next();
-
-}
-
-break;
-
-
-
+    case 3: {  // Accelerate to 15kph (~1500 RPM) for 10m (~4s)
+      rpm_request_ = std::min(1500.0f, static_cast<float>(t * RPM_RAMP_RATE));
+      torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));
+      braking_ = 0.0f;
+      if (rpm_request_ >= 1500.0f || t >= 8.0) next();
+      break;
     }
-
-
-
-   case 4: {
-
-  float acceleration = (5.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
-
-  float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
-
-
-
-  auto msg = std::make_shared<ackermann_msgs::msg::AckermannDriveStamped>();
-
-  msg->header.stamp = this->now();
-
-  msg->header.frame_id = "";
-
-  msg->drive.steering_angle = steering_ * M_PI / 180.0f;
-
-  msg->drive.acceleration = smooth_acc;
-
-  msg->drive.speed = 0.0f;
-
-  msg->drive.steering_angle_velocity = 0.0f;
-
-  msg->drive.jerk = 0.0f;
-
-
-
-  this->commandCallback(msg);
-
-
-
-  // 🚨 Full brake, disable torque and RPM
-
-  rpm_request_ = 0.0f;
-
-  torque_ = 0.0f;
-
-  braking_ = 60.0f;
-
-
-
-  ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION_FORWARD;
-
-  ai2vcu_data_.AI2VCU_AXLE_TORQUE_REQUEST_Nm = 0.0f;
-
-
-
-  if (t >= 5.0) {
-
-    next();
-
-  }
-
-  break;
-
-}
-  
-    case 5: {  // Ramp up to 200 RPM and torque in ≤10s
-
-      // rpm_request_ = std::min(200.0f, static_cast<float>(t * RPM_RAMP_RATE));  // assume 20 rpm/sec
-
-      // torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));     // assume 5 Nm/sec
-
-      // braking_ = 0.0f;
-
-      // if (rpm_request_ >= 200.0f || t >= 10.0) {
-
-      //   rpm_request_ = 200.0f;
-
-      //   torque_ = 50.0f;
-
-      //   next();
-
-      // }
-
-      // break;braking_ = 0.0f;
-
-
-
-// Compute acceleration needed to reach 50 RPM in 3s
-
-float acceleration = (10.0f * M_PI * WHEEL_RADIUS_) / 9.0f;
-
-float smooth_acc = std::min(acceleration, static_cast<float>(t * acceleration / 3.0f));
-
-
-
-// Construct an Ackermann message
-
-auto msg = std::make_shared<ackermann_msgs::msg::AckermannDriveStamped>();
-
-msg->header.stamp = this->now();
-
-msg->header.frame_id = "";
-
-msg->drive.steering_angle = steering_ * M_PI / 180.0f;
-
-msg->drive.acceleration = smooth_acc;
-
-msg->drive.speed = 0.0f;
-
-msg->drive.steering_angle_velocity = 0.0f;
-
-msg->drive.jerk = 0.0f;
-
-
-
-// 🔁 Reuse your existing logic to compute torque/brake/rpm
-
-this->commandCallback(msg);
-
-
-
-// 🔧 Force RPM to exactly 50
-
-rpm_request_ = 500.0f;
-
-
-
-// 🔧 Force direction to FORWARD regardless of AS_STATE
-
-ai2vcu_data_.AI2VCU_DIRECTION_REQUEST = fs_ai_api_direction_request_e::DIRECTION_FORWARD;
-
-
-
-if (t >= 7.5) {
-
-  next();
-
-}
-
-break;
-
-
-
+    case 4: {  // Brake to stop (~3s)
+      rpm_request_ = 0.0f;
+      torque_ = 0.0f;
+      braking_ = 60.0f;
+      if (t >= 3.0) next();
+      break;
     }
-
-
-    case 6: {  // Trigger EBS and set AS to EMERGENCY
+    case 5: {  // Re-accelerate to 15kph again
+      rpm_request_ = std::min(1500.0f, static_cast<float>(t * RPM_RAMP_RATE));
+      torque_ = std::min(50.0f, static_cast<float>(t * TORQUE_RAMP_RATE));
+      braking_ = 0.0f;
+      if (rpm_request_ >= 1500.0f || t >= 8.0) next();
+      break;
+    }
+    case 6: {  // EBS deploy
       ebs_state_ = fs_ai_api_estop_request_e::ESTOP_YES;
       as_state_ = fs_ai_api_as_state_e::AS_EMERGENCY_BRAKE;
       inspection_completed_ = true;
-      RCLCPP_WARN(get_logger(), "Static Inspection B: EBS Triggered");
+      RCLCPP_WARN(get_logger(), "Autonomous Demo complete. EBS triggered.");
       break;
     }
   }
