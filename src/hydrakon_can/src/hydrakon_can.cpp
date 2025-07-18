@@ -908,7 +908,7 @@ void HydrakonCanInterface::handleAutonomousDemo() {
     stage_start_time_ = inspection_start_time_ = now;
     RCLCPP_INFO(get_logger(), "Autonomous Demo mission started.");
   }
-
+//s
   double t = (now - stage_start_time_).seconds();
   auto next = [&]() { inspection_stage_++; stage_start_time_ = now; };
 
