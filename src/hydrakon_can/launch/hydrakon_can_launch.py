@@ -7,10 +7,10 @@ def generate_launch_description():
         executable="hydrakon_can_node",
         name="hydrakon_can",
         parameters=[
-            {"use_sim_time": False},
+            {"use_sim_time": True},
             {"can_debug": 1},
-            {"simulate_can": 0},
-            {"can_interface": "can2"},
+            {"simulate_can": 1},
+            {"can_interface": "vcan0"},
             {"loop_rate": 100}, # keep as int
             {"rpm_limit": 100.0}, # must be float!
             {"max_acc": 5.0},
