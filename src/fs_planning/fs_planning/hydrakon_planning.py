@@ -5,10 +5,6 @@ from rclpy.node import Node
 from vision_msgs.msg import Detection2DArray
 from ackermann_msgs.msg import AckermannDriveStamped
 from std_msgs.msg import String, Bool
-import math
-import numpy as np
-import re
-from collections import defaultdict
 
 class CombinedController(Node):
     def __init__(self):
@@ -63,6 +59,7 @@ class CombinedController(Node):
         # Default drive parameters
         self.default_speed = 0.0
         self.default_acceleration = 0.0
+        self.cone_pair_acceleration = 0.9  # Acceleration when both cone types are detected
         
         # State tracking for driving flag
         self.current_as_state = None
@@ -74,8 +71,10 @@ class CombinedController(Node):
         self.get_logger().info('Combined Controller initialized')
         self.get_logger().info('- Camera-based steering control')
         self.get_logger().info('- AMI state monitoring with 20Hz driving flag')
+        self.get_logger().info('- Acceleration when cone pairs detected')
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
+        self.get_logger().info(f'Cone pair acceleration: {self.cone_pair_acceleration}')
     
     def parse_state_string(self, state_str):
         """Parse the state string to extract AS and AMI values"""
@@ -146,21 +145,31 @@ class CombinedController(Node):
                     elif class_id == self.BLUE_CONE:
                         blue_cones.append((center_x, center_y, confidence))
         
-        # Calculate steering angle
+        # Calculate steering angle and acceleration
         steering_angle = self.calculate_steering_angle(yellow_cones, blue_cones)
+        acceleration = self.calculate_acceleration(yellow_cones, blue_cones)
         
         # Only publish steering commands if we should be driving
         if self.should_set_driving_flag():
-            self.publish_steering_command(steering_angle, msg.header.stamp)
+            self.publish_steering_command(steering_angle, acceleration, msg.header.stamp)
             
             # Log detection info
             if len(yellow_cones) > 0 or len(blue_cones) > 0:
-                self.get_logger().info(f'DRIVING: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad')
+                accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
+                self.get_logger().info(f'DRIVING: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
         else:
-            # Send zero steering when not in driving mode
-            self.publish_steering_command(0.0, msg.header.stamp)
+            # Send zero steering and acceleration when not in driving mode
+            self.publish_steering_command(0.0, 0.0, msg.header.stamp)
             if len(yellow_cones) > 0 or len(blue_cones) > 0:
                 self.get_logger().debug(f'NOT DRIVING: Cones detected but not in driving mode (AS: {self.current_as_state}, AMI: {self.current_ami_state})')
+    
+    def calculate_acceleration(self, yellow_cones, blue_cones):
+        """Calculate acceleration based on cone detection"""
+        # Accelerate when both yellow and blue cones are detected (cone pair)
+        if len(yellow_cones) > 0 and len(blue_cones) > 0:
+            return self.cone_pair_acceleration
+        else:
+            return self.default_acceleration
     
     def calculate_steering_angle(self, yellow_cones, blue_cones):
         """Calculate steering angle based on cone positions"""
@@ -226,8 +235,8 @@ class CombinedController(Node):
         closest_cone = max(cones, key=lambda cone: cone[1])
         return closest_cone
     
-    def publish_steering_command(self, steering_angle, timestamp):
-        """Publish Ackermann steering command"""
+    def publish_steering_command(self, steering_angle, acceleration, timestamp):
+        """Publish Ackermann steering command with acceleration"""
         msg = AckermannDriveStamped()
         
         msg.header.stamp = timestamp
@@ -236,13 +245,13 @@ class CombinedController(Node):
         msg.drive.steering_angle = float(steering_angle)
         msg.drive.steering_angle_velocity = 0.0
         msg.drive.speed = self.default_speed
-        msg.drive.acceleration = self.default_acceleration
+        msg.drive.acceleration = float(acceleration)
         msg.drive.jerk = 0.0
         
         self.command_publisher.publish(msg)
 
 def test_mode():
-    """Test mode - sends test messages for both driving flag and steering"""
+    """Test mode - sends test messages for both driving flag and steering with acceleration"""
     rclpy.init()
     
     node = Node('combined_controller_test')
@@ -260,19 +269,19 @@ def test_mode():
         10
     )
     
-    node.get_logger().info('TEST MODE: Combined Controller Test')
-    node.get_logger().info('Testing both driving flag and steering commands...')
+    node.get_logger().info('TEST MODE: Combined Controller Test with Acceleration')
+    node.get_logger().info('Testing driving flag, steering commands, and acceleration...')
     node.get_logger().info('Press Ctrl+C to stop')
     
     import time
     test_sequence = [
-        {'driving': True, 'steering': 0.0},
-        {'driving': True, 'steering': 0.1},
-        {'driving': True, 'steering': 0.2},
-        {'driving': True, 'steering': 0.0},
-        {'driving': True, 'steering': -0.1},
-        {'driving': True, 'steering': -0.2},
-        {'driving': False, 'steering': 0.0},
+        {'driving': True, 'steering': 0.0, 'acceleration': 0.0},
+        {'driving': True, 'steering': 0.1, 'acceleration': 0.9},
+        {'driving': True, 'steering': 0.2, 'acceleration': 0.9},
+        {'driving': True, 'steering': 0.0, 'acceleration': 0.9},
+        {'driving': True, 'steering': -0.1, 'acceleration': 0.0},
+        {'driving': True, 'steering': -0.2, 'acceleration': 0.0},
+        {'driving': False, 'steering': 0.0, 'acceleration': 0.0},
     ]
     
     sequence_index = 0
@@ -286,19 +295,20 @@ def test_mode():
             flag_msg.data = test_data['driving']
             driving_flag_publisher.publish(flag_msg)
             
-            # Publish steering command
+            # Publish steering command with acceleration
             cmd_msg = AckermannDriveStamped()
             cmd_msg.header.stamp = node.get_clock().now().to_msg()
             cmd_msg.header.frame_id = 'base_link'
             cmd_msg.drive.steering_angle = float(test_data['steering'])
             cmd_msg.drive.steering_angle_velocity = 0.0
             cmd_msg.drive.speed = 0.0
-            cmd_msg.drive.acceleration = 0.0
+            cmd_msg.drive.acceleration = float(test_data['acceleration'])
             cmd_msg.drive.jerk = 0.0
             
             command_publisher.publish(cmd_msg)
             
-            node.get_logger().info(f'Published - Driving: {test_data["driving"]}, Steering: {test_data["steering"]:.1f} rad')
+            accel_status = "ACCELERATING" if test_data['acceleration'] > 0 else "COASTING"
+            node.get_logger().info(f'Published - Driving: {test_data["driving"]}, Steering: {test_data["steering"]:.1f} rad, {accel_status}: {test_data["acceleration"]:.1f}')
             
             sequence_index += 1
             time.sleep(2.0)
@@ -327,7 +337,7 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) == 1 or '--test' in sys.argv:
-        print("Running in TEST MODE - testing both driving flag and steering")
+        print("Running in TEST MODE - testing driving flag, steering, and acceleration")
         print("Use 'ros2 run <package> <node>' for normal operation")
         test_mode()
     else:

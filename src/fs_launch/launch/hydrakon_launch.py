@@ -398,7 +398,7 @@ def generate_launch_description():
         LogInfo(msg="=" * 60),
         
         # Perception
-        # camera_detection_node,
+        camera_detection_node,
         # lidar_node,
         # lidar_cluster_node,
         # nmea_gps_bridge_node,
