@@ -60,6 +60,7 @@ class CombinedController(Node):
         self.max_steering_angle = 0.4
         self.steering_gain = 0.003
         self.min_cone_distance = 50
+        self.estimated_track_width_pixels = 240  # Standard Formula Student track width (~3.5m) in pixels
         
         # Cone class IDs
         self.YELLOW_CONE = 0
@@ -377,31 +378,31 @@ class CombinedController(Node):
                 self.get_logger().debug(f'Midpoint steering: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}')
                 self.get_logger().debug(f'Raw midpoint: {raw_midpoint:.1f}, Smoothed target: {target_x:.1f}')
         
-        # Case 2: Only yellow cones detected
+        # Case 2: Only yellow cones detected - LEFT TURN, follow curvature
         elif len(yellow_cones) > 0:
             closest_yellow = self.find_closest_cone(yellow_cones)
             if closest_yellow is not None:
                 yellow_x = closest_yellow[0]
                 
-                # Target point is to the right of yellow cone (assuming yellow is left boundary)
-                offset = 120  # Increased offset for better track following
-                target_x = yellow_x + offset
+                # Estimate track width and aim for centerline with left offset
+                estimated_track_width_pixels = 240  # Estimated track width in pixels (3.5m real world)
+                target_x = yellow_x + (estimated_track_width_pixels / 2)  # Aim for center of track
                 
-                steering_mode = "yellow_only"
-                self.get_logger().debug(f'Yellow-only steering: Yellow at {yellow_x:.1f}, Target: {target_x:.1f}')
+                steering_mode = "yellow_curvature"
+                self.get_logger().debug(f'Yellow curvature steering: Yellow at {yellow_x:.1f}, Target centerline: {target_x:.1f}')
         
-        # Case 3: Only blue cones detected
+        # Case 3: Only blue cones detected - RIGHT TURN, follow curvature
         elif len(blue_cones) > 0:
             closest_blue = self.find_closest_cone(blue_cones)
             if closest_blue is not None:
                 blue_x = closest_blue[0]
                 
-                # Target point is to the left of blue cone (assuming blue is right boundary)
-                offset = 120  # Increased offset for better track following
-                target_x = blue_x - offset
+                # Estimate track width and aim for centerline with right offset
+                estimated_track_width_pixels = 240  # Estimated track width in pixels (3.5m real world)
+                target_x = blue_x - (estimated_track_width_pixels / 2)  # Aim for center of track
                 
-                steering_mode = "blue_only"
-                self.get_logger().debug(f'Blue-only steering: Blue at {blue_x:.1f}, Target: {target_x:.1f}')
+                steering_mode = "blue_curvature"
+                self.get_logger().debug(f'Blue curvature steering: Blue at {blue_x:.1f}, Target centerline: {target_x:.1f}')
         
         # Convert target position to steering angle
         if target_x is not None:
