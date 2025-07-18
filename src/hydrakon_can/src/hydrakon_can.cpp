@@ -898,72 +898,7 @@ void HydrakonCanInterface::handleStaticInspectionB() {
 // }
 
 
-void HydrakonCanInterface::handleAutonomousDemo() {
-  if (!driving_flag_ || inspection_completed_) return;
 
-  auto now = this->now();
-  if (!inspection_started_) {
-    inspection_started_ = true;
-    inspection_stage_ = 0;
-    stage_start_time_ = inspection_start_time_ = now;
-    RCLCPP_INFO(get_logger(), "Autonomous Demo mission started.");
-  }
-//s
-  double t = (now - stage_start_time_).seconds();
-  auto next = [&]() { inspection_stage_++; stage_start_time_ = now; };
-
-  switch (inspection_stage_) {
-    case 0: {  // Sweep left
-      steering_ = -std::min(MAX_STEERING_ANGLE_DEG_, static_cast<float>(t * STEERING_RAMP_RATE));
-      if (steering_ <= -MAX_STEERING_ANGLE_DEG_) next();
-      break;
-    }
-    case 1: {  // Sweep right
-      steering_ = std::min(MAX_STEERING_ANGLE_DEG_, static_cast<float>(t * STEERING_RAMP_RATE));
-      if (steering_ >= MAX_STEERING_ANGLE_DEG_) next();
-      break;
-    }
-    case 2: {  // Return to center
-      float delta = std::min(static_cast<float>(STEERING_RAMP_RATE * t), std::abs(steering_));
-      steering_ += (steering_ > 0 ? -delta : delta);
-      if (std::abs(steering_) <= 0.1f) {
-        steering_ = 0.0f;
-        next();
-      }
-      break;
-    }
-case 3: {  // Re-accelerate to 15kph again
-      rpm_request_ = std::min(1500.0f, static_cast<float>(t * RPM_RAMP_RATE));
-      torque_ = 195.0f;
-      braking_ = 0.0f;
-      if (rpm_request_ >= 1500.0f || t >= 4.0) next();
-      break;
-    }
-    case 4: {  // Brake to stop (~3s)
-      rpm_request_ = 0.0f;
-      torque_ = 0.0f;
-      braking_ = 60.0f;
-      if (t >= 3.0) next();
-      break;
-    }
-    case 5: {  // Re-accelerate to 15kph again
-      rpm_request_ = std::min(3000.0f, static_cast<float>(t * RPM_RAMP_RATE));
-      torque_ = 195.0f;
-      braking_ = 0.0f;
-      if (rpm_request_ >= 3000.0f || t >= 4.0) next();
-      break;
-    }
-    case 6: {  // EBS deploy
-      ebs_state_ = fs_ai_api_estop_request_e::ESTOP_YES;
-      as_state_ = fs_ai_api_as_state_e::AS_EMERGENCY_BRAKE;
-      inspection_completed_ = true;
-      RCLCPP_WARN(get_logger(), "Autonomous Demo complete. EBS triggered.");
-      break;
-    }
-  }
-
-  last_cmd_message_time_ = this->now().seconds();
-}
 
 
 int main(int argc, char **argv) {
