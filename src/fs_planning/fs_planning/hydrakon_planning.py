@@ -5,10 +5,7 @@ from rclpy.node import Node
 from vision_msgs.msg import Detection2DArray
 from ackermann_msgs.msg import AckermannDriveStamped
 from std_msgs.msg import String, Bool
-import math
-import numpy as np
 import re
-from collections import defaultdict
 
 class CombinedController(Node):
     def should_run_controller(self):
