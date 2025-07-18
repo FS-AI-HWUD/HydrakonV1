@@ -418,8 +418,8 @@ def generate_launch_description():
         # static_transform_base_to_gps,
         
         # Visualization
-        # foxglove_bridge_node,
-        # rosbridge_server_node,
+        foxglove_bridge_node,
+        rosbridge_server_node,
         # rviz_node,
         
         LogInfo(msg="✅ All systems online!"),
