@@ -67,7 +67,7 @@ class CombinedController(Node):
         self.default_speed = 0.0
         self.default_acceleration = 0.0
         self.emergency_brake_value = 60.0  # Brake value for emergency stop
-        self.cone_pair_acceleration = 0.5  # Acceleration when both cone types are detected
+        self.cone_pair_acceleration = 0.9  # Acceleration when both cone types are detected
         
         # State tracking for AMI control
         self.current_as_state = None
