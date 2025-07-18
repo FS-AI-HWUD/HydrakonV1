@@ -75,9 +75,14 @@ class CombinedController(Node):
         # Last steering angle for continuity
         self.last_steering_angle = 0.0
         
+        # Midpoint steering parameters
+        self.midpoint_smoothing = 0.7  # Smoothing factor for midpoint calculation
+        self.last_midpoint_x = None
+        
         self.get_logger().info('Combined Controller initialized')
         self.get_logger().info('- Camera-based steering control')
         self.get_logger().info('- AMI state monitoring with 20Hz driving flag')
+        self.get_logger().info('- Enhanced midpoint steering between yellow and blue cones')
         self.get_logger().info('- Acceleration when cone pairs detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
         self.get_logger().info('- Emergency brake on orange cone detection')
@@ -85,6 +90,7 @@ class CombinedController(Node):
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
         self.get_logger().info(f'Cone pair acceleration: {self.cone_pair_acceleration}')
+        self.get_logger().info(f'Midpoint smoothing factor: {self.midpoint_smoothing}')
     
     def parse_state_string(self, state_str):
         """Parse the state string to extract AS and AMI values"""
@@ -183,88 +189,130 @@ class CombinedController(Node):
                 self.get_logger().debug(f'NOT DRIVING: Cones detected but not in driving mode (AS: {self.current_as_state}, AMI: {self.current_ami_state})')
     
     def calculate_acceleration(self, yellow_cones, blue_cones):
-        """Calculate acceleration based on cone detection with position validation"""
-        # Only accelerate when both yellow and blue cones are detected AND properly positioned
+        """Calculate acceleration based on cone detection with enhanced position validation"""
+        # Only accelerate when both yellow and blue cones are detected
         if len(yellow_cones) > 0 and len(blue_cones) > 0:
             # Find closest cones for position validation
             closest_yellow = self.find_closest_cone(yellow_cones)
             closest_blue = self.find_closest_cone(blue_cones)
             
+            if closest_yellow is None or closest_blue is None:
+                return self.default_acceleration
+            
             yellow_x = closest_yellow[0]
             blue_x = closest_blue[0]
             
-            # Validate track layout: yellow should be on the left, blue on the right
-            # Only accelerate if cones are properly positioned
-            if yellow_x < blue_x:  # Yellow left, blue right = correct track layout
-                self.get_logger().debug(f'Valid cone pair: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f} - ACCELERATING')
-                return self.cone_pair_acceleration
+            # More lenient position validation - allow for some overlap
+            # Yellow should generally be on the left, blue on the right
+            separation_threshold = 50  # Minimum separation in pixels
+            
+            if abs(yellow_x - blue_x) > separation_threshold:
+                # Check if yellow is generally on the left side of blue
+                if yellow_x < blue_x:
+                    self.get_logger().debug(f'Valid cone pair: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - ACCELERATING')
+                    return self.cone_pair_acceleration
+                else:
+                    self.get_logger().debug(f'Reversed cone positioning: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f} - Slow acceleration')
+                    return self.cone_pair_acceleration * 0.5  # Reduced acceleration for unclear positioning
             else:
-                self.get_logger().debug(f'Invalid cone positioning: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f} - NOT accelerating')
-                return self.default_acceleration
+                self.get_logger().debug(f'Cones too close: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - Normal acceleration')
+                return self.cone_pair_acceleration * 0.7  # Moderate acceleration when cones are close
         else:
             return self.default_acceleration
     
     def calculate_steering_angle(self, yellow_cones, blue_cones):
-        """Calculate steering angle based on cone positions"""
+        """Calculate steering angle with enhanced midpoint targeting"""
         
         # If no cones detected, return last steering angle for continuity
         if len(yellow_cones) == 0 and len(blue_cones) == 0:
             return self.last_steering_angle * 0.9  # Gradually reduce steering
         
         target_x = None
+        steering_mode = "unknown"
         
-        # Case 1: Both yellow and blue cones detected
+        # Case 1: Both yellow and blue cones detected - MIDPOINT STEERING
         if len(yellow_cones) > 0 and len(blue_cones) > 0:
+            # Find the best pair of cones for midpoint calculation
             closest_yellow = self.find_closest_cone(yellow_cones)
             closest_blue = self.find_closest_cone(blue_cones)
             
-            yellow_x = closest_yellow[0]
-            blue_x = closest_blue[0]
-            
-            # Calculate midpoint between closest yellow and blue cones
-            target_x = (yellow_x + blue_x) / 2.0
-            
-            self.get_logger().debug(f'Midpoint steering: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, Target: {target_x:.1f}')
+            if closest_yellow is not None and closest_blue is not None:
+                yellow_x = closest_yellow[0]
+                blue_x = closest_blue[0]
+                
+                # Calculate raw midpoint
+                raw_midpoint = (yellow_x + blue_x) / 2.0
+                
+                # Apply smoothing if we have a previous midpoint
+                if self.last_midpoint_x is not None:
+                    target_x = (self.midpoint_smoothing * self.last_midpoint_x + 
+                               (1 - self.midpoint_smoothing) * raw_midpoint)
+                else:
+                    target_x = raw_midpoint
+                
+                # Store for next iteration
+                self.last_midpoint_x = target_x
+                
+                steering_mode = "midpoint"
+                
+                # Enhanced logging for midpoint steering
+                self.get_logger().debug(f'Midpoint steering: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}')
+                self.get_logger().debug(f'Raw midpoint: {raw_midpoint:.1f}, Smoothed target: {target_x:.1f}')
         
         # Case 2: Only yellow cones detected
         elif len(yellow_cones) > 0:
             closest_yellow = self.find_closest_cone(yellow_cones)
-            yellow_x = closest_yellow[0]
-            
-            # Target point is to the left of yellow cone
-            offset = 100
-            target_x = yellow_x - offset
-            
-            self.get_logger().debug(f'Yellow-only steering: Yellow at {yellow_x:.1f}, Target: {target_x:.1f}')
+            if closest_yellow is not None:
+                yellow_x = closest_yellow[0]
+                
+                # Target point is to the right of yellow cone (assuming yellow is left boundary)
+                offset = 120  # Increased offset for better track following
+                target_x = yellow_x + offset
+                
+                steering_mode = "yellow_only"
+                self.get_logger().debug(f'Yellow-only steering: Yellow at {yellow_x:.1f}, Target: {target_x:.1f}')
         
         # Case 3: Only blue cones detected
         elif len(blue_cones) > 0:
             closest_blue = self.find_closest_cone(blue_cones)
-            blue_x = closest_blue[0]
-            
-            # Target point is to the right of blue cone
-            offset = 100
-            target_x = blue_x + offset
-            
-            self.get_logger().debug(f'Blue-only steering: Blue at {blue_x:.1f}, Target: {target_x:.1f}')
+            if closest_blue is not None:
+                blue_x = closest_blue[0]
+                
+                # Target point is to the left of blue cone (assuming blue is right boundary)
+                offset = 120  # Increased offset for better track following
+                target_x = blue_x - offset
+                
+                steering_mode = "blue_only"
+                self.get_logger().debug(f'Blue-only steering: Blue at {blue_x:.1f}, Target: {target_x:.1f}')
         
         # Convert target position to steering angle
         if target_x is not None:
             error_pixels = target_x - self.image_center_x
             steering_angle = -error_pixels * self.steering_gain
+            
+            # Apply steering angle limits
             steering_angle = max(-self.max_steering_angle, 
                                min(self.max_steering_angle, steering_angle))
             
+            # Store for continuity
             self.last_steering_angle = steering_angle
+            
+            # Log steering decision
+            self.get_logger().debug(f'Steering calculation: Mode={steering_mode}, Target={target_x:.1f}, Error={error_pixels:.1f}, Angle={steering_angle:.3f}')
+            
             return steering_angle
         
-        return self.last_steering_angle * 0.9
+        # Fallback: gradually reduce last steering angle
+        fallback_angle = self.last_steering_angle * 0.9
+        self.get_logger().debug(f'Fallback steering: {fallback_angle:.3f}')
+        return fallback_angle
     
     def find_closest_cone(self, cones):
-        """Find the closest cone based on y-coordinate"""
+        """Find the closest cone based on y-coordinate (bottom of image is closer)"""
         if not cones:
             return None
         
+        # Closest cone is the one with the highest y-coordinate (bottom of image)
         closest_cone = max(cones, key=lambda cone: cone[1])
         return closest_cone
     
@@ -319,19 +367,20 @@ def test_mode():
         10
     )
     
-    node.get_logger().info('TEST MODE: Combined Controller Test with Emergency Brake')
-    node.get_logger().info('Testing driving flag, steering commands, acceleration, and emergency brake...')
+    node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Midpoint Steering')
+    node.get_logger().info('Testing driving flag, midpoint steering, acceleration, and emergency brake...')
     node.get_logger().info('Press Ctrl+C to stop')
     
     import time
     test_sequence = [
-        {'driving': True, 'steering': 0.0, 'acceleration': 0.0},
-        {'driving': True, 'steering': 0.1, 'acceleration': 0.9},  # Cone pair detected
-        {'driving': True, 'steering': 0.2, 'acceleration': 0.9},  # Cone pair detected
-        {'driving': True, 'steering': 0.0, 'acceleration': 0.9},  # Cone pair detected
-        {'driving': True, 'steering': -0.1, 'acceleration': 0.0}, # Single cone
-        {'driving': True, 'steering': -0.2, 'acceleration': 0.0}, # Single cone
-        {'driving': False, 'steering': 0.0, 'acceleration': 0.0},
+        {'driving': True, 'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead'},
+        {'driving': True, 'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration'},
+        {'driving': True, 'steering': 0.2, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
+        {'driving': True, 'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
+        {'driving': True, 'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
+        {'driving': True, 'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
+        {'driving': False, 'steering': 0.0, 'acceleration': 0.0, 'description': 'Not driving'},
+        {'driving': True, 'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test'},
     ]
     
     sequence_index = 0
