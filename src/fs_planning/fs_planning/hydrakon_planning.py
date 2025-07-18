@@ -11,6 +11,14 @@ import re
 from collections import defaultdict
 
 class CombinedController(Node):
+    def should_run_controller(self):
+        """Check if controller should run based on AMI state"""
+        if self.current_ami_state is None:
+            return False
+        
+        # Only run when AMI state is SKIDPAD
+        return self.current_ami_state == 'SKIDPAD'
+    
     def __init__(self):
         super().__init__('combined_controller')
         
@@ -61,7 +69,7 @@ class CombinedController(Node):
         self.emergency_brake_value = 60.0  # Brake value for emergency stop
         self.cone_pair_acceleration = 0.9  # Acceleration when both cone types are detected
         
-        # State tracking for driving flag
+        # State tracking for AMI control
         self.current_as_state = None
         self.current_ami_state = None
         
@@ -74,6 +82,7 @@ class CombinedController(Node):
         
         self.get_logger().info('Combined Controller initialized')
         self.get_logger().info('- Camera-based steering control')
+        self.get_logger().info('- Runs only when AMI state is SKIDPAD')
         self.get_logger().info('- Enhanced midpoint steering between yellow and blue cones')
         self.get_logger().info('- Acceleration when cone pairs detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
@@ -144,13 +153,19 @@ class CombinedController(Node):
         steering_angle = self.calculate_steering_angle(yellow_cones, blue_cones)
         acceleration = self.calculate_acceleration(yellow_cones, blue_cones)
         
-        # Only publish steering commands if we should be driving
-        self.publish_steering_command(steering_angle, acceleration, msg.header.stamp)
-        
-        # Log detection info
-        if len(yellow_cones) > 0 or len(blue_cones) > 0:
-            accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
-            self.get_logger().info(f'DRIVING: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
+        # Only publish steering commands if AMI state is SKIDPAD
+        if self.should_run_controller():
+            self.publish_steering_command(steering_angle, acceleration, msg.header.stamp)
+            
+            # Log detection info
+            if len(yellow_cones) > 0 or len(blue_cones) > 0:
+                accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
+                self.get_logger().info(f'SKIDPAD ACTIVE: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
+        else:
+            # Send zero steering and acceleration when not in SKIDPAD mode
+            self.publish_steering_command(0.0, 0.0, msg.header.stamp)
+            if len(yellow_cones) > 0 or len(blue_cones) > 0:
+                self.get_logger().debug(f'NOT SKIDPAD: Cones detected but AMI state is {self.current_ami_state}, not running controller')
     
     def calculate_acceleration(self, yellow_cones, blue_cones):
         """Calculate acceleration based on cone detection with enhanced position validation"""
@@ -327,17 +342,18 @@ def test_mode():
     
     node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Midpoint Steering')
     node.get_logger().info('Testing midpoint steering, acceleration, and emergency brake...')
+    node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is SKIDPAD')
     node.get_logger().info('Press Ctrl+C to stop')
     
     import time
     test_sequence = [
         {'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead'},
         {'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration'},
-        {'steering': 0.4, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
-        {'steering': -0.4, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
+        {'steering': 0.2, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
+        {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
         {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
         {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
-        {'steering': 0.0, 'acceleration': -1.9, 'description': 'Emergency brake test'},
+        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test'},
     ]
     
     sequence_index = 0
