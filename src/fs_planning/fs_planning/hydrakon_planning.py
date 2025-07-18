@@ -16,8 +16,8 @@ class CombinedController(Node):
         if self.current_ami_state is None:
             return False
         
-        # Only run when AMI state is SKIDPAD
-        return self.current_ami_state == 'SKIDPAD'
+        # Run when AMI state is AUTOCROSS or TRACKDRIVE
+        return self.current_ami_state in ['AUTOCROSS', 'TRACKDRIVE']
     
     def __init__(self):
         super().__init__('combined_controller')
@@ -45,7 +45,7 @@ class CombinedController(Node):
             10
         )
         
-
+        
         
         # Camera parameters
         self.image_width = 1280
@@ -73,6 +73,14 @@ class CombinedController(Node):
         self.current_as_state = None
         self.current_ami_state = None
         
+        # Lap counting variables
+        self.lap_count = 0
+        self.max_laps_autocross = 2
+        self.max_laps_trackdrive = 11
+        self.passed_through_orange = False
+        self.orange_cooldown = 0  # Frames to wait before detecting orange again
+        self.orange_cooldown_frames = 30  # About 1 second at 30 FPS
+        
         # Last steering angle for continuity
         self.last_steering_angle = 0.0
         
@@ -82,11 +90,13 @@ class CombinedController(Node):
         
         self.get_logger().info('Combined Controller initialized')
         self.get_logger().info('- Camera-based steering control')
-        self.get_logger().info('- Runs only when AMI state is SKIDPAD')
+        self.get_logger().info('- Runs when AMI state is AUTOCROSS or TRACKDRIVE')
+        self.get_logger().info('- AUTOCROSS: 2 laps max, TRACKDRIVE: 11 laps max')
+        self.get_logger().info('- Lap counting by passing through orange cones')
         self.get_logger().info('- Enhanced midpoint steering between yellow and blue cones')
         self.get_logger().info('- Acceleration when cone pairs detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
-        self.get_logger().info('- Emergency brake on orange cone detection')
+        self.get_logger().info('- Emergency brake when max laps completed')
         self.get_logger().info(f'Emergency brake value: {self.emergency_brake_value}')
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
@@ -112,17 +122,32 @@ class CombinedController(Node):
         as_state, ami_state = self.parse_state_string(msg.data)
         
         if as_state is not None and ami_state is not None:
+            # Reset lap count when switching modes
+            if self.current_ami_state != ami_state and ami_state in ['AUTOCROSS', 'TRACKDRIVE']:
+                self.lap_count = 0
+                self.get_logger().info(f'Mode changed to {ami_state}, resetting lap count to 0')
+            
             self.current_as_state = as_state
             self.current_ami_state = ami_state
             self.get_logger().debug(f'Updated state - AS: {as_state}, AMI: {ami_state}')
     
-
+    def check_lap_completion(self):
+        """Check if maximum laps have been completed"""
+        if self.current_ami_state == 'AUTOCROSS':
+            return self.lap_count >= self.max_laps_autocross
+        elif self.current_ami_state == 'TRACKDRIVE':
+            return self.lap_count >= self.max_laps_trackdrive
+        return False
     
     def detection_callback(self, msg):
         """Process camera detections and calculate steering angle"""
         yellow_cones = []
         blue_cones = []
         orange_cones = []
+        
+        # Decrease orange cooldown
+        if self.orange_cooldown > 0:
+            self.orange_cooldown -= 1
         
         # Extract cone positions from detections
         for detection in msg.detections:
@@ -143,29 +168,38 @@ class CombinedController(Node):
                     elif class_id == self.ORANGE_CONE or class_id == self.LARGE_ORANGE_CONE:
                         orange_cones.append((center_x, center_y, confidence))
         
-        # Check for orange cones (finish line) - EMERGENCY BRAKE
-        if len(orange_cones) > 0:
-            self.get_logger().warn(f'ORANGE CONES DETECTED! EMERGENCY BRAKE - {len(orange_cones)} orange cones found')
-            self.publish_emergency_brake_command(msg.header.stamp)
-            return
+        # Check for orange cones - LAP COUNTING OR FINISH
+        if len(orange_cones) > 0 and self.orange_cooldown == 0:
+            # Check if we've completed maximum laps
+            if self.check_lap_completion():
+                self.get_logger().warn(f'MAX LAPS COMPLETED! EMERGENCY BRAKE - {self.lap_count} laps done')
+                self.publish_emergency_brake_command(msg.header.stamp)
+                return
+            else:
+                # Count a lap
+                self.lap_count += 1
+                self.orange_cooldown = self.orange_cooldown_frames
+                max_laps = self.max_laps_autocross if self.current_ami_state == 'AUTOCROSS' else self.max_laps_trackdrive
+                self.get_logger().info(f'LAP {self.lap_count} COMPLETED! ({self.lap_count}/{max_laps} laps in {self.current_ami_state} mode)')
         
         # Calculate steering angle and acceleration
         steering_angle = self.calculate_steering_angle(yellow_cones, blue_cones)
         acceleration = self.calculate_acceleration(yellow_cones, blue_cones)
         
-        # Only publish steering commands if AMI state is SKIDPAD
+        # Only publish steering commands if AMI state is AUTOCROSS or TRACKDRIVE
         if self.should_run_controller():
             self.publish_steering_command(steering_angle, acceleration, msg.header.stamp)
             
             # Log detection info
             if len(yellow_cones) > 0 or len(blue_cones) > 0:
                 accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
-                self.get_logger().info(f'SKIDPAD ACTIVE: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
+                max_laps = self.max_laps_autocross if self.current_ami_state == 'AUTOCROSS' else self.max_laps_trackdrive
+                self.get_logger().info(f'{self.current_ami_state} ACTIVE (Lap {self.lap_count}/{max_laps}): {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
         else:
-            # Send zero steering and acceleration when not in SKIDPAD mode
+            # Send zero steering and acceleration when not in AUTOCROSS/TRACKDRIVE mode
             self.publish_steering_command(0.0, 0.0, msg.header.stamp)
             if len(yellow_cones) > 0 or len(blue_cones) > 0:
-                self.get_logger().debug(f'NOT SKIDPAD: Cones detected but AMI state is {self.current_ami_state}, not running controller')
+                self.get_logger().debug(f'NOT RACING: Cones detected but AMI state is {self.current_ami_state}, not running controller')
     
     def calculate_acceleration(self, yellow_cones, blue_cones):
         """Calculate acceleration based on cone detection with enhanced position validation"""
@@ -192,10 +226,10 @@ class CombinedController(Node):
                     return self.cone_pair_acceleration
                 else:
                     self.get_logger().debug(f'Reversed cone positioning: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f} - Slow acceleration')
-                    return self.cone_pair_acceleration * 0.5  # Reduced acceleration for unclear positioning
+                    return self.cone_pair_acceleration * 0.9  # Reduced acceleration for unclear positioning
             else:
                 self.get_logger().debug(f'Cones too close: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - Normal acceleration')
-                return self.cone_pair_acceleration * 0.7  # Moderate acceleration when cones are close
+                return self.cone_pair_acceleration * 0.9  # Moderate acceleration when cones are close
         else:
             return self.default_acceleration
     
@@ -340,9 +374,10 @@ def test_mode():
         10
     )
     
-    node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Midpoint Steering')
+    node.get_logger().info('TEST MODE: Combined Controller Test with Lap Counting')
+    node.get_logger().info('Testing lap counting for AUTOCROSS (2 laps) and TRACKDRIVE (11 laps)')
     node.get_logger().info('Testing midpoint steering, acceleration, and emergency brake...')
-    node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is SKIDPAD')
+    node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is AUTOCROSS or TRACKDRIVE')
     node.get_logger().info('Press Ctrl+C to stop')
     
     import time
@@ -353,7 +388,7 @@ def test_mode():
         {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
         {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
         {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
-        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test'},
+        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test (max laps)'},
     ]
     
     sequence_index = 0
@@ -410,7 +445,7 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) == 1 or '--test' in sys.argv:
-        print("Running in TEST MODE - testing steering, acceleration, and emergency brake")
+        print("Running in TEST MODE - testing steering, acceleration, lap counting, and emergency brake")
         print("Use 'ros2 run <package> <node>' for normal operation")
         test_mode()
     else:
