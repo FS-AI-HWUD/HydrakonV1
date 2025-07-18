@@ -37,14 +37,7 @@ class CombinedController(Node):
             10
         )
         
-        self.driving_flag_publisher = self.create_publisher(
-            Bool,
-            '/hydrakon_can/driving_flag',
-            10
-        )
-        
-        # Timer to publish driving flag at 20Hz (50ms)
-        self.timer = self.create_timer(0.05, self.publish_driving_flag)
+
         
         # Camera parameters
         self.image_width = 1280
@@ -81,7 +74,6 @@ class CombinedController(Node):
         
         self.get_logger().info('Combined Controller initialized')
         self.get_logger().info('- Camera-based steering control')
-        self.get_logger().info('- AMI state monitoring with 20Hz driving flag')
         self.get_logger().info('- Enhanced midpoint steering between yellow and blue cones')
         self.get_logger().info('- Acceleration when cone pairs detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
@@ -115,29 +107,7 @@ class CombinedController(Node):
             self.current_ami_state = ami_state
             self.get_logger().debug(f'Updated state - AS: {as_state}, AMI: {ami_state}')
     
-    def should_set_driving_flag(self):
-        """Check if driving flag should be true based on current state"""
-        if self.current_as_state is None or self.current_ami_state is None:
-            return False
-        
-        # Check if AS is DRIVING and AMI is not NOT_SELECTED
-        return (self.current_as_state == 'DRIVING' and 
-                self.current_ami_state != 'NOT_SELECTED')
-    
-    def publish_driving_flag(self):
-        """Publish the driving flag at 20Hz"""
-        msg = Bool()
-        msg.data = self.should_set_driving_flag()
-        self.driving_flag_publisher.publish(msg)
-        
-        # Log only when state changes to avoid spam
-        if hasattr(self, 'last_published_state'):
-            if self.last_published_state != msg.data:
-                self.get_logger().info(f'Driving flag changed to: {msg.data} (AS: {self.current_as_state}, AMI: {self.current_ami_state})')
-        else:
-            self.get_logger().info(f'Publishing driving flag: {msg.data} (AS: {self.current_as_state}, AMI: {self.current_ami_state})')
-        
-        self.last_published_state = msg.data
+
     
     def detection_callback(self, msg):
         """Process camera detections and calculate steering angle"""
@@ -175,18 +145,12 @@ class CombinedController(Node):
         acceleration = self.calculate_acceleration(yellow_cones, blue_cones)
         
         # Only publish steering commands if we should be driving
-        if self.should_set_driving_flag():
-            self.publish_steering_command(steering_angle, acceleration, msg.header.stamp)
-            
-            # Log detection info
-            if len(yellow_cones) > 0 or len(blue_cones) > 0:
-                accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
-                self.get_logger().info(f'DRIVING: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
-        else:
-            # Send zero steering and acceleration when not in driving mode
-            self.publish_steering_command(0.0, 0.0, msg.header.stamp)
-            if len(yellow_cones) > 0 or len(blue_cones) > 0:
-                self.get_logger().debug(f'NOT DRIVING: Cones detected but not in driving mode (AS: {self.current_as_state}, AMI: {self.current_ami_state})')
+        self.publish_steering_command(steering_angle, acceleration, msg.header.stamp)
+        
+        # Log detection info
+        if len(yellow_cones) > 0 or len(blue_cones) > 0:
+            accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
+            self.get_logger().info(f'DRIVING: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
     
     def calculate_acceleration(self, yellow_cones, blue_cones):
         """Calculate acceleration based on cone detection with enhanced position validation"""
@@ -361,26 +325,19 @@ def test_mode():
         10
     )
     
-    driving_flag_publisher = node.create_publisher(
-        Bool,
-        '/hydrakon_can/driving_flag',
-        10
-    )
-    
     node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Midpoint Steering')
-    node.get_logger().info('Testing driving flag, midpoint steering, acceleration, and emergency brake...')
+    node.get_logger().info('Testing midpoint steering, acceleration, and emergency brake...')
     node.get_logger().info('Press Ctrl+C to stop')
     
     import time
     test_sequence = [
-        {'driving': True, 'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead'},
-        {'driving': True, 'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration'},
-        {'driving': True, 'steering': 0.2, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
-        {'driving': True, 'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
-        {'driving': True, 'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
-        {'driving': True, 'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
-        {'driving': False, 'steering': 0.0, 'acceleration': 0.0, 'description': 'Not driving'},
-        {'driving': True, 'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test'},
+        {'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead'},
+        {'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration'},
+        {'steering': 0.2, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
+        {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
+        {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
+        {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
+        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test'},
     ]
     
     sequence_index = 0
@@ -388,11 +345,6 @@ def test_mode():
     try:
         while rclpy.ok():
             test_data = test_sequence[sequence_index % len(test_sequence)]
-            
-            # Publish driving flag
-            flag_msg = Bool()
-            flag_msg.data = test_data['driving']
-            driving_flag_publisher.publish(flag_msg)
             
             # Publish steering command with acceleration or brake
             cmd_msg = AckermannDriveStamped()
@@ -413,7 +365,7 @@ def test_mode():
             
             command_publisher.publish(cmd_msg)
             
-            node.get_logger().info(f'Published - {test_data["description"]}: Driving: {test_data["driving"]}, Steering: {test_data["steering"]:.1f} rad, {status}')
+            node.get_logger().info(f'Published - {test_data["description"]}: Steering: {test_data["steering"]:.1f} rad, {status}')
             
             sequence_index += 1
             time.sleep(2.0)
@@ -442,7 +394,7 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) == 1 or '--test' in sys.argv:
-        print("Running in TEST MODE - testing driving flag, steering, acceleration, and emergency brake")
+        print("Running in TEST MODE - testing steering, acceleration, and emergency brake")
         print("Use 'ros2 run <package> <node>' for normal operation")
         test_mode()
     else:
