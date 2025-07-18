@@ -333,11 +333,11 @@ def test_mode():
     test_sequence = [
         {'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead'},
         {'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration'},
-        {'steering': 0.2, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
-        {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
+        {'steering': 0.4, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
+        {'steering': -0.4, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
         {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
         {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
-        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test'},
+        {'steering': 0.0, 'acceleration': -1.9, 'description': 'Emergency brake test'},
     ]
     
     sequence_index = 0
