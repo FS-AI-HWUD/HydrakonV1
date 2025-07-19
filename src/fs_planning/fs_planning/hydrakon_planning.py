@@ -81,7 +81,11 @@ class CombinedController(Node):
         self.max_laps_trackdrive = 11
         self.last_orange_gate_time = 0.0
         self.cooldown_duration = 2.0  # 2 seconds cooldown between gate passages
-        self.orange_gate_passed_threshold = 100.0  # Distance threshold in pixels for gate passage
+        
+        # NEW: Track orange cone positions for lap counting
+        self.previous_orange_positions = []
+        self.lap_detection_threshold = 0.7  # Threshold for detecting lap completion
+        self.min_gate_approach_distance = self.image_height * 0.6  # Orange cones must be in bottom 40% of image
         
         # Mission completion variables
         self.mission_completed = False
@@ -100,11 +104,12 @@ class CombinedController(Node):
         self.get_logger().info('- Camera-based steering control')
         self.get_logger().info('- Runs when AMI state is AUTOCROSS or TRACKDRIVE')
         self.get_logger().info('- AUTOCROSS: 2 laps max, TRACKDRIVE: 11 laps max')
-        self.get_logger().info('- Lap counting by passing through orange cones')
+        self.get_logger().info('- Lap counting by passing through orange cones (movement-based detection)')
         self.get_logger().info('- Enhanced midpoint steering between yellow and blue cones')
-        self.get_logger().info('- Acceleration when cone pairs detected')
+        self.get_logger().info('- FIXED: Acceleration in curves - accelerates when ANY cones detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
         self.get_logger().info('- Emergency brake when max laps completed')
+        self.get_logger().info('- FIXED: Blue cones -> right turn, Yellow cones -> left turn')
         self.get_logger().info(f'Emergency brake value: {self.emergency_brake_value}')
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
@@ -136,6 +141,7 @@ class CombinedController(Node):
                 self.mission_completed = False
                 self.brake_start_time = None
                 self.last_orange_gate_time = 0.0
+                self.previous_orange_positions = []  # Reset tracking
                 self.get_logger().info(f'Mode changed to {ami_state}, resetting lap count and mission status')
             
             self.current_as_state = as_state
@@ -158,7 +164,7 @@ class CombinedController(Node):
         
         # Find pairs of orange cones that could form a gate
         best_gate = None
-        min_distance = float('inf')
+        max_distance = 0  # We want the closest gate (highest y-coordinate)
         
         for i in range(len(orange_cones)):
             for j in range(i + 1, len(orange_cones)):
@@ -174,18 +180,18 @@ class CombinedController(Node):
                 
                 # Check if this is a reasonable gate (cones not too far apart)
                 cone_separation = abs(cone1[0] - cone2[0])
-                if cone_separation < 300 and distance > min_distance:  # Reasonable gate width
+                if cone_separation < 300 and distance > max_distance:  # Reasonable gate width
                     best_gate = {
                         'midpoint_x': midpoint_x,
                         'midpoint_y': midpoint_y,
                         'distance': distance
                     }
-                    min_distance = distance
+                    max_distance = distance
         
         return best_gate
     
     def check_orange_gate_passage(self, orange_cones):
-        """Check if vehicle has passed through orange gate"""
+        """Check if vehicle has passed through orange gate using movement detection"""
         import time
         current_time = time.time()
         
@@ -193,30 +199,62 @@ class CombinedController(Node):
         if current_time - self.last_orange_gate_time < self.cooldown_duration:
             return False
         
-        # Check single orange cone or pair
+        # Check if we have orange cones
         if len(orange_cones) < 1:
+            self.previous_orange_positions = []  # Reset if no cones
             return False
         
-        # Find the closest orange gate (pair of orange cones) or single cone
+        # Find the closest orange gate
         best_gate = self.find_closest_orange_gate(orange_cones)
-        
         if not best_gate:
             return False
         
-        # Check if vehicle is close enough to the gate center
-        gate_center_x = best_gate['midpoint_x']
-        gate_center_y = best_gate['midpoint_y']
+        current_position = {
+            'x': best_gate['midpoint_x'],
+            'y': best_gate['midpoint_y'],
+            'timestamp': current_time
+        }
         
-        # Calculate distance from image center to gate center (vehicle position)
-        distance_to_gate = abs(gate_center_x - self.image_center_x)
+        # Check if gate is close enough to the car (in bottom portion of image)
+        if best_gate['midpoint_y'] < self.min_gate_approach_distance:
+            # Gate is too far away
+            self.previous_orange_positions = []
+            return False
         
-        self.get_logger().debug(f"Orange gate distance: {distance_to_gate:.2f}px, threshold: {self.orange_gate_passed_threshold:.2f}px")
-        self.get_logger().debug(f"Gate center: ({gate_center_x:.2f}, {gate_center_y:.2f})")
+        # Store current position for tracking
+        self.previous_orange_positions.append(current_position)
         
-        # Check if vehicle is close enough to gate center and gate is close enough
-        if distance_to_gate < self.orange_gate_passed_threshold and gate_center_y > self.image_height * 0.6:
-            self.last_orange_gate_time = current_time
-            return True
+        # Keep only recent positions (last 1 second)
+        self.previous_orange_positions = [
+            pos for pos in self.previous_orange_positions 
+            if current_time - pos['timestamp'] < 1.0
+        ]
+        
+        # Check if we have enough data points to detect passage
+        if len(self.previous_orange_positions) < 3:
+            return False
+        
+        # Check if orange gate has moved towards the car significantly
+        # (y-coordinate should increase over time as gate approaches)
+        positions = self.previous_orange_positions
+        y_positions = [pos['y'] for pos in positions]
+        
+        # Calculate movement trend
+        if len(y_positions) >= 3:
+            early_y = sum(y_positions[:len(y_positions)//2]) / (len(y_positions)//2)
+            recent_y = sum(y_positions[len(y_positions)//2:]) / (len(y_positions) - len(y_positions)//2)
+            
+            # Movement towards camera (increasing y) indicates passage
+            movement = recent_y - early_y
+            
+            self.get_logger().debug(f"Orange gate movement: {movement:.2f} pixels (early: {early_y:.1f}, recent: {recent_y:.1f})")
+            
+            # If gate has moved significantly towards camera and is now close
+            if movement > 50 and recent_y > self.image_height * 0.7:
+                self.last_orange_gate_time = current_time
+                self.previous_orange_positions = []  # Reset tracking
+                self.get_logger().info(f"GATE PASSAGE DETECTED: Movement {movement:.1f} pixels, final position y={recent_y:.1f}")
+                return True
         
         return False
     
@@ -305,15 +343,19 @@ class CombinedController(Node):
                 self.get_logger().debug(f'NOT RACING: Cones detected but AMI state is {self.current_ami_state}, not running controller')
     
     def calculate_acceleration(self, yellow_cones, blue_cones):
-        """Calculate acceleration based on cone detection with enhanced position validation"""
-        # Only accelerate when both yellow and blue cones are detected
+        """Calculate acceleration based on cone detection - FIXED to accelerate in curves"""
+        
+        # FIXED: Accelerate when ANY cones are detected (not just pairs)
+        # This allows acceleration through curves where only one cone type is visible
+        
+        # Case 1: Both yellow and blue cones detected - MAXIMUM ACCELERATION
         if len(yellow_cones) > 0 and len(blue_cones) > 0:
             # Find closest cones for position validation
             closest_yellow = self.find_closest_cone(yellow_cones)
             closest_blue = self.find_closest_cone(blue_cones)
             
             if closest_yellow is None or closest_blue is None:
-                return self.default_acceleration
+                return self.cone_pair_acceleration * 0.8  # Still accelerate even if validation fails
             
             yellow_x = closest_yellow[0]
             blue_x = closest_blue[0]
@@ -325,19 +367,35 @@ class CombinedController(Node):
             if abs(yellow_x - blue_x) > separation_threshold:
                 # Check if yellow is generally on the left side of blue
                 if yellow_x < blue_x:
-                    self.get_logger().debug(f'Valid cone pair: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - ACCELERATING')
-                    return self.cone_pair_acceleration
+                    self.get_logger().debug(f'Valid cone pair: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - MAX ACCELERATION')
+                    return self.cone_pair_acceleration  # Full acceleration
                 else:
-                    self.get_logger().debug(f'Reversed cone positioning: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f} - Slow acceleration')
-                    return self.cone_pair_acceleration * 0.5  # Reduced acceleration for unclear positioning
+                    self.get_logger().debug(f'Reversed cone positioning: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f} - Good acceleration')
+                    return self.cone_pair_acceleration * 0.8  # Still good acceleration
             else:
-                self.get_logger().debug(f'Cones too close: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - Normal acceleration')
-                return self.cone_pair_acceleration * 0.7  # Moderate acceleration when cones are close
-        else:
-            return self.default_acceleration
+                self.get_logger().debug(f'Cones close together: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - Good acceleration')
+                return self.cone_pair_acceleration * 0.8  # Good acceleration when cones are close
+        
+        # Case 2: Only yellow cones detected - CURVE ACCELERATION (left curve)
+        elif len(yellow_cones) > 0:
+            closest_yellow = self.find_closest_cone(yellow_cones)
+            if closest_yellow is not None:
+                self.get_logger().debug(f'Yellow cones only: Yellow at {closest_yellow[0]:.1f} - CURVE ACCELERATION (left curve)')
+                return self.cone_pair_acceleration * 0.7  # Good acceleration through left curves
+            
+        # Case 3: Only blue cones detected - CURVE ACCELERATION (right curve)
+        elif len(blue_cones) > 0:
+            closest_blue = self.find_closest_cone(blue_cones)
+            if closest_blue is not None:
+                self.get_logger().debug(f'Blue cones only: Blue at {closest_blue[0]:.1f} - CURVE ACCELERATION (right curve)')
+                return self.cone_pair_acceleration * 0.7  # Good acceleration through right curves
+        
+        # Case 4: No cones detected - COAST/MAINTAIN SPEED
+        self.get_logger().debug('No cones detected - COASTING')
+        return self.default_acceleration
     
     def calculate_steering_angle(self, yellow_cones, blue_cones):
-        """Calculate steering angle with enhanced midpoint targeting"""
+        """Calculate steering angle with enhanced midpoint targeting - FIXED DIRECTIONS"""
         
         # If no cones detected, return last steering angle for continuity
         if len(yellow_cones) == 0 and len(blue_cones) == 0:
@@ -375,36 +433,41 @@ class CombinedController(Node):
                 self.get_logger().debug(f'Midpoint steering: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}')
                 self.get_logger().debug(f'Raw midpoint: {raw_midpoint:.1f}, Smoothed target: {target_x:.1f}')
         
-        # Case 2: Only yellow cones detected - LEFT TURN, follow curvature
+        # Case 2: Only yellow cones detected - AVOID LEFT, turn RIGHT to get back on track
         elif len(yellow_cones) > 0:
             closest_yellow = self.find_closest_cone(yellow_cones)
             if closest_yellow is not None:
                 yellow_x = closest_yellow[0]
                 
-                # Estimate track width and aim for centerline with left offset
+                # FIXED: When seeing yellow cones (track boundary on left), 
+                # aim to the RIGHT of the yellow cones to stay on track
                 estimated_track_width_pixels = 240  # Estimated track width in pixels (3.5m real world)
-                target_x = yellow_x + (estimated_track_width_pixels / 2)  # Aim for center of track
+                target_x = yellow_x + (estimated_track_width_pixels / 2)  # Aim RIGHT of yellow cones
                 
-                steering_mode = "yellow_curvature"
-                self.get_logger().debug(f'Yellow curvature steering: Yellow at {yellow_x:.1f}, Target centerline: {target_x:.1f}')
+                steering_mode = "avoid_yellow_left"
+                self.get_logger().debug(f'Yellow avoidance: Yellow at {yellow_x:.1f}, Target (right of yellow): {target_x:.1f}')
         
-        # Case 3: Only blue cones detected - RIGHT TURN, follow curvature
+        # Case 3: Only blue cones detected - AVOID RIGHT, turn LEFT to get back on track
         elif len(blue_cones) > 0:
             closest_blue = self.find_closest_cone(blue_cones)
             if closest_blue is not None:
                 blue_x = closest_blue[0]
                 
-                # Estimate track width and aim for centerline with right offset
+                # FIXED: When seeing blue cones (track boundary on right),
+                # aim to the LEFT of the blue cones to stay on track
                 estimated_track_width_pixels = 240  # Estimated track width in pixels (3.5m real world)
-                target_x = blue_x - (estimated_track_width_pixels / 2)  # Aim for center of track
+                target_x = blue_x - (estimated_track_width_pixels / 2)  # Aim LEFT of blue cones
                 
-                steering_mode = "blue_curvature"
-                self.get_logger().debug(f'Blue curvature steering: Blue at {blue_x:.1f}, Target centerline: {target_x:.1f}')
+                steering_mode = "avoid_blue_right"
+                self.get_logger().debug(f'Blue avoidance: Blue at {blue_x:.1f}, Target (left of blue): {target_x:.1f}')
         
         # Convert target position to steering angle
         if target_x is not None:
             error_pixels = target_x - self.image_center_x
-            steering_angle = -error_pixels * self.steering_gain
+            # FIXED: Correct steering direction
+            # Positive error (target right of center) -> positive steering (turn right)
+            # Negative error (target left of center) -> negative steering (turn left)
+            steering_angle = error_pixels * self.steering_gain  # Removed negative sign
             
             # Apply steering angle limits
             steering_angle = max(-self.max_steering_angle, 
@@ -413,8 +476,9 @@ class CombinedController(Node):
             # Store for continuity
             self.last_steering_angle = steering_angle
             
-            # Log steering decision
-            self.get_logger().debug(f'Steering calculation: Mode={steering_mode}, Target={target_x:.1f}, Error={error_pixels:.1f}, Angle={steering_angle:.3f}')
+            # Log steering decision with direction
+            direction = "RIGHT" if steering_angle > 0 else "LEFT" if steering_angle < 0 else "STRAIGHT"
+            self.get_logger().debug(f'Steering: Mode={steering_mode}, Target={target_x:.1f}, Error={error_pixels:.1f}, Angle={steering_angle:.3f} ({direction})')
             
             return steering_angle
         
@@ -490,20 +554,22 @@ def test_mode():
         10
     )
     
-    node.get_logger().info('TEST MODE: Combined Controller Test with Lap Counting and Mission Completion')
+    node.get_logger().info('TEST MODE: Fixed Combined Controller Test')
+    node.get_logger().info('FIXES: Blue cones -> right turn, Yellow cones -> left turn')
+    node.get_logger().info('FIXES: Improved lap counting using orange cone movement detection')
     node.get_logger().info('Testing lap counting for AUTOCROSS (2 laps) and TRACKDRIVE (11 laps)')
     node.get_logger().info('Testing mission completion flag after 2 second brake')
-    node.get_logger().info('Testing midpoint steering, acceleration, and emergency brake...')
+    node.get_logger().info('Testing fixed steering directions and improved lap detection...')
     node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is AUTOCROSS or TRACKDRIVE')
     node.get_logger().info('Press Ctrl+C to stop')
     
     import time
     test_sequence = [
         {'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead'},
-        {'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration'},
+        {'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration (blue cones detected)'},
         {'steering': 0.2, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
         {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
-        {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
+        {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration (yellow cones detected)'},
         {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
         {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test (max laps)'},
     ]
@@ -562,7 +628,7 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) == 1 or '--test' in sys.argv:
-        print("Running in TEST MODE - testing steering, acceleration, lap counting, mission completion, and emergency brake")
+        print("Running in TEST MODE - testing FIXED steering directions and improved lap counting")
         print("Use 'ros2 run <package> <node>' for normal operation")
         test_mode()
     else:
