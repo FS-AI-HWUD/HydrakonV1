@@ -187,9 +187,9 @@ class CombinedController(Node):
     
     def calculate_acceleration(self, yellow_cones, blue_cones):
         """Calculate acceleration based on cone detection with enhanced position validation"""
-        # Only accelerate when both yellow and blue cones are detected
+        # Accelerate when any cones are detected (both colors, single color, or mixed)
         if len(yellow_cones) > 0 and len(blue_cones) > 0:
-            # Find closest cones for position validation
+            # Both colors detected - best case scenario
             closest_yellow = self.find_closest_cone(yellow_cones)
             closest_blue = self.find_closest_cone(blue_cones)
             
@@ -214,7 +214,19 @@ class CombinedController(Node):
             else:
                 self.get_logger().debug(f'Cones too close: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - Normal acceleration')
                 return self.cone_pair_acceleration * 0.7  # Moderate acceleration when cones are close
+        
+        elif len(yellow_cones) > 0:
+            # Only yellow cones detected - accelerate for left turn
+            self.get_logger().debug(f'Yellow-only detected: {len(yellow_cones)} cones - ACCELERATING for left turn')
+            return self.cone_pair_acceleration * 0.8  # Slightly reduced acceleration for single color
+        
+        elif len(blue_cones) > 0:
+            # Only blue cones detected - accelerate for right turn
+            self.get_logger().debug(f'Blue-only detected: {len(blue_cones)} cones - ACCELERATING for right turn')
+            return self.cone_pair_acceleration * 0.8  # Slightly reduced acceleration for single color
+        
         else:
+            # No cones detected - coast
             return self.default_acceleration
     
     def calculate_steering_angle(self, yellow_cones, blue_cones):
