@@ -68,8 +68,11 @@ class CombinedController(Node):
         # Default drive parameters
         self.default_speed = 0.0
         self.default_acceleration = 0.0
-        self.emergency_brake_value = 60.0  # Brake value for emergency stop
         self.cone_pair_acceleration = 0.9  # Acceleration when both cone types are detected
+        
+        # Mission completion parameters (NO EBS - just slow down)
+        self.mission_complete_deceleration = -2.0  # Slow deceleration when mission complete
+        self.post_mission_duration = 3.0  # Slow down for 3 seconds before stopping
         
         # State tracking for AMI control
         self.current_as_state = None
@@ -77,21 +80,20 @@ class CombinedController(Node):
         
         # Lap counting variables
         self.lap_count = 0
-        self.max_laps_autocross = 2
-        self.max_laps_trackdrive = 11
+        self.max_laps_autocross = 1  # FIXED: Back to correct FS value (was 2 due to false start detection)
+        self.max_laps_trackdrive = 10  # FIXED: Back to correct FS value (was 11 due to false start detection)
         self.last_orange_gate_time = 0.0
-        self.cooldown_duration = 2.0  # 2 seconds cooldown between gate passages
+        self.cooldown_duration = 3.0  # 3 seconds cooldown between gate passages
         
-        # NEW: Track orange cone positions for lap counting
-        self.previous_orange_positions = []
-        self.lap_detection_threshold = 0.7  # Threshold for detecting lap completion
-        self.min_gate_approach_distance = self.image_height * 0.6  # Orange cones must be in bottom 40% of image
+        # FIXED: Simplified lap counting based on your simulation logic
+        self.orange_gate_passed_threshold = 150.0  # Distance threshold in pixels for gate passage
+        self.min_lap_time = 15.0  # Minimum time between laps (prevents false detections)
+        self.lap_start_time = 0.0  # Track when current lap started
         
         # Mission completion variables
         self.mission_completed = False
-        self.brake_timer = None
-        self.brake_start_time = None
-        self.brake_duration = 2.0  # 2 seconds
+        self.mission_start_time = None
+        self.post_mission_duration = 3.0  # Slow down for 3 seconds
         
         # Last steering angle for continuity
         self.last_steering_angle = 0.0
@@ -103,14 +105,14 @@ class CombinedController(Node):
         self.get_logger().info('Combined Controller initialized')
         self.get_logger().info('- Camera-based steering control')
         self.get_logger().info('- Runs when AMI state is AUTOCROSS or TRACKDRIVE')
-        self.get_logger().info('- AUTOCROSS: 2 laps max, TRACKDRIVE: 11 laps max')
-        self.get_logger().info('- Lap counting by passing through orange cones (movement-based detection)')
+        self.get_logger().info('- AUTOCROSS: 1 lap max, TRACKDRIVE: 10 laps max (correct FS values)')
+        self.get_logger().info('- FIXED: Lap counting using proximity detection (based on simulation logic)')
         self.get_logger().info('- Enhanced midpoint steering between yellow and blue cones')
         self.get_logger().info('- FIXED: Acceleration in curves - accelerates when ANY cones detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
-        self.get_logger().info('- Emergency brake when max laps completed')
+        self.get_logger().info('- Emergency brake when max laps completed → CHANGED to gradual slowdown (NO EBS)')
         self.get_logger().info('- FIXED: Blue cones -> right turn, Yellow cones -> left turn')
-        self.get_logger().info(f'Emergency brake value: {self.emergency_brake_value}')
+        self.get_logger().info(f'Mission complete deceleration: {self.mission_complete_deceleration}')
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
         self.get_logger().info(f'Cone pair acceleration: {self.cone_pair_acceleration}')
@@ -139,9 +141,9 @@ class CombinedController(Node):
             if self.current_ami_state != ami_state and ami_state in ['AUTOCROSS', 'TRACKDRIVE']:
                 self.lap_count = 0
                 self.mission_completed = False
-                self.brake_start_time = None
+                self.mission_start_time = None
                 self.last_orange_gate_time = 0.0
-                self.previous_orange_positions = []  # Reset tracking
+                self.lap_start_time = 0.0  # Reset lap timing
                 self.get_logger().info(f'Mode changed to {ami_state}, resetting lap count and mission status')
             
             self.current_as_state = as_state
@@ -149,22 +151,27 @@ class CombinedController(Node):
             self.get_logger().debug(f'Updated state - AS: {as_state}, AMI: {ami_state}')
     
     def find_closest_orange_gate(self, orange_cones):
-        """Find the closest orange gate (pair of orange cones) or single cone"""
+        """Find the closest orange gate (pair of orange cones) or single cone - FIXED"""
         if len(orange_cones) < 1:
             return None
         
         # If only one orange cone, treat it as a gate
         if len(orange_cones) == 1:
             cone = orange_cones[0]
+            # Convert to distance from center (closer to camera = larger y coordinate)
+            distance_from_center = abs(cone[0] - self.image_center_x)
             return {
                 'midpoint_x': cone[0],
                 'midpoint_y': cone[1],
-                'distance': cone[1]  # Use y-coordinate as distance (closer to bottom = closer)
+                'distance': cone[1],  # y-coordinate represents depth (closer = larger y)
+                'width': 0,  # Single cone has no width
+                'is_single_cone': True,
+                'center_distance': distance_from_center
             }
         
         # Find pairs of orange cones that could form a gate
         best_gate = None
-        max_distance = 0  # We want the closest gate (highest y-coordinate)
+        min_distance_to_camera = float('inf')  # We want the closest gate
         
         for i in range(len(orange_cones)):
             for j in range(i + 1, len(orange_cones)):
@@ -175,23 +182,39 @@ class CombinedController(Node):
                 midpoint_x = (cone1[0] + cone2[0]) / 2.0
                 midpoint_y = (cone1[1] + cone2[1]) / 2.0
                 
-                # Distance is based on y-coordinate (closer to bottom = closer)
-                distance = midpoint_y
-                
-                # Check if this is a reasonable gate (cones not too far apart)
+                # Check if this is a reasonable gate (cones not too far apart horizontally)
                 cone_separation = abs(cone1[0] - cone2[0])
-                if cone_separation < 300 and distance > max_distance:  # Reasonable gate width
-                    best_gate = {
-                        'midpoint_x': midpoint_x,
-                        'midpoint_y': midpoint_y,
-                        'distance': distance
-                    }
-                    max_distance = distance
+                
+                # Gate width should be reasonable (like your simulation: 1.5m to 12m)
+                # Assuming ~3 pixels per meter at typical distances
+                min_gate_width_pixels = 45   # ~1.5m
+                max_gate_width_pixels = 360  # ~12m
+                
+                if min_gate_width_pixels <= cone_separation <= max_gate_width_pixels:
+                    # Distance to camera is inverse of y-coordinate (closer = larger y)
+                    avg_y = midpoint_y
+                    distance_from_center = abs(midpoint_x - self.image_center_x)
+                    
+                    # Prefer gates that are closer to camera and closer to center
+                    gate_score = avg_y - (distance_from_center * 0.5)
+                    
+                    if gate_score > min_distance_to_camera:
+                        best_gate = {
+                            'midpoint_x': midpoint_x,
+                            'midpoint_y': midpoint_y,
+                            'distance': avg_y,
+                            'width': cone_separation,
+                            'is_single_cone': False,
+                            'center_distance': distance_from_center
+                        }
+                        min_distance_to_camera = gate_score
+                        
+                        self.get_logger().debug(f'Valid orange gate: width={cone_separation:.1f}px, center_dist={distance_from_center:.1f}px, y={avg_y:.1f}')
         
         return best_gate
     
     def check_orange_gate_passage(self, orange_cones):
-        """Check if vehicle has passed through orange gate using movement detection"""
+        """Check if vehicle has passed through orange gate - FIXED using simulation logic"""
         import time
         current_time = time.time()
         
@@ -201,7 +224,6 @@ class CombinedController(Node):
         
         # Check if we have orange cones
         if len(orange_cones) < 1:
-            self.previous_orange_positions = []  # Reset if no cones
             return False
         
         # Find the closest orange gate
@@ -209,51 +231,41 @@ class CombinedController(Node):
         if not best_gate:
             return False
         
-        current_position = {
-            'x': best_gate['midpoint_x'],
-            'y': best_gate['midpoint_y'],
-            'timestamp': current_time
-        }
+        # Check if gate is close enough to the vehicle (using y-coordinate as depth indicator)
+        # Gates closer to camera have higher y values
+        min_passage_y = self.image_height * 0.6  # Must be in bottom 40% of image
         
-        # Check if gate is close enough to the car (in bottom portion of image)
-        if best_gate['midpoint_y'] < self.min_gate_approach_distance:
-            # Gate is too far away
-            self.previous_orange_positions = []
+        if best_gate['midpoint_y'] < min_passage_y:
+            self.get_logger().debug(f"Orange gate too far: y={best_gate['midpoint_y']:.1f}, need y>{min_passage_y:.1f}")
             return False
         
-        # Store current position for tracking
-        self.previous_orange_positions.append(current_position)
+        # Check if vehicle is close enough to gate center horizontally
+        distance_to_gate_center = abs(best_gate['midpoint_x'] - self.image_center_x)
         
-        # Keep only recent positions (last 1 second)
-        self.previous_orange_positions = [
-            pos for pos in self.previous_orange_positions 
-            if current_time - pos['timestamp'] < 1.0
-        ]
+        self.get_logger().debug(f"Orange gate check: center_dist={distance_to_gate_center:.1f}px, threshold={self.orange_gate_passed_threshold:.1f}px, y={best_gate['midpoint_y']:.1f}")
         
-        # Check if we have enough data points to detect passage
-        if len(self.previous_orange_positions) < 3:
-            return False
-        
-        # Check if orange gate has moved towards the car significantly
-        # (y-coordinate should increase over time as gate approaches)
-        positions = self.previous_orange_positions
-        y_positions = [pos['y'] for pos in positions]
-        
-        # Calculate movement trend
-        if len(y_positions) >= 3:
-            early_y = sum(y_positions[:len(y_positions)//2]) / (len(y_positions)//2)
-            recent_y = sum(y_positions[len(y_positions)//2:]) / (len(y_positions) - len(y_positions)//2)
+        # Vehicle must pass close to the gate center (like your simulation logic)
+        if distance_to_gate_center < self.orange_gate_passed_threshold:
+            # Check minimum lap time to prevent false detections (like your simulation)
+            if self.lap_start_time > 0:
+                lap_time = current_time - self.lap_start_time
+                if lap_time < self.min_lap_time:
+                    self.get_logger().warn(f"FALSE LAP DETECTED - IGNORED! Lap time: {lap_time:.1f}s (under {self.min_lap_time:.1f}s minimum)")
+                    self.last_orange_gate_time = current_time  # Update cooldown but don't count lap
+                    return False
             
-            # Movement towards camera (increasing y) indicates passage
-            movement = recent_y - early_y
-            
-            self.get_logger().debug(f"Orange gate movement: {movement:.2f} pixels (early: {early_y:.1f}, recent: {recent_y:.1f})")
-            
-            # If gate has moved significantly towards camera and is now close
-            if movement > 50 and recent_y > self.image_height * 0.7:
-                self.last_orange_gate_time = current_time
-                self.previous_orange_positions = []  # Reset tracking
-                self.get_logger().info(f"GATE PASSAGE DETECTED: Movement {movement:.1f} pixels, final position y={recent_y:.1f}")
+            # Valid gate passage!
+            self.last_orange_gate_time = current_time
+            if self.lap_start_time == 0:
+                # First gate passage - start lap timing
+                self.lap_start_time = current_time
+                self.get_logger().info(f"RACE STARTED! Starting lap timing... (Gate: {distance_to_gate_center:.1f}px from center)")
+                return False  # Don't count the first passage as a completed lap
+            else:
+                # Subsequent passage - lap completed
+                lap_time = current_time - self.lap_start_time
+                self.lap_start_time = current_time  # Start new lap
+                self.get_logger().info(f"GATE PASSAGE DETECTED: {distance_to_gate_center:.1f}px from center, y={best_gate['midpoint_y']:.1f}, lap_time={lap_time:.1f}s")
                 return True
         
         return False
@@ -294,33 +306,35 @@ class CombinedController(Node):
         # Check for orange gate passage - LAP COUNTING OR FINISH
         if len(orange_cones) > 0:
             if self.check_orange_gate_passage(orange_cones):
-                # Check if we've completed maximum laps
+                # Count a lap FIRST
+                self.lap_count += 1
+                max_laps = self.max_laps_autocross if self.current_ami_state == 'AUTOCROSS' else self.max_laps_trackdrive
+                self.get_logger().info(f'LAP {self.lap_count} COMPLETED! Passed through orange gate ({self.lap_count}/{max_laps} laps in {self.current_ami_state} mode)')
+                
+                # THEN check if we've completed maximum laps
                 if self.check_lap_completion():
                     if not self.mission_completed:
-                        self.get_logger().warn(f'MAX LAPS COMPLETED! EMERGENCY BRAKE - {self.lap_count} laps done')
+                        self.get_logger().warn(f'TARGET LAPS COMPLETED! SLOWING DOWN - {self.lap_count} laps done')
                         self.mission_completed = True
-                        self.brake_start_time = self.get_clock().now()
-                        self.publish_emergency_brake_command(msg.header.stamp)
-                    return
-                else:
-                    # Count a lap
-                    self.lap_count += 1
-                    max_laps = self.max_laps_autocross if self.current_ami_state == 'AUTOCROSS' else self.max_laps_trackdrive
-                    self.get_logger().info(f'LAP {self.lap_count} COMPLETED! Passed through orange gate ({self.lap_count}/{max_laps} laps in {self.current_ami_state} mode)')
+                        self.mission_start_time = self.get_clock().now()
+                        # Continue with normal control but start slowing down
         
-        # Handle mission completion sequence
-        if self.mission_completed and self.brake_start_time is not None:
+        # Handle mission completion sequence - SLOW DOWN, NO EBS
+        if self.mission_completed and self.mission_start_time is not None:
             current_time = self.get_clock().now()
-            elapsed_time = (current_time - self.brake_start_time).nanoseconds / 1e9
+            elapsed_time = (current_time - self.mission_start_time).nanoseconds / 1e9
             
-            if elapsed_time >= self.brake_duration:
-                # 2 seconds have passed, set mission completed flag
+            if elapsed_time >= self.post_mission_duration:
+                # 3 seconds have passed, publish mission completed and stop
                 self.publish_mission_completed()
-                self.brake_start_time = None  # Prevent repeated publishing
+                self.publish_steering_command(0.0, 0.0, msg.header.stamp)  # Stop the car
+                self.mission_start_time = None  # Prevent repeated publishing
                 return
             else:
-                # Still in brake period, continue braking
-                self.publish_emergency_brake_command(msg.header.stamp)
+                # Still in slow-down period, continue with steering but decelerate
+                steering_angle = self.calculate_steering_angle(yellow_cones, blue_cones)
+                # Use negative acceleration to slow down
+                self.publish_steering_command(steering_angle, self.mission_complete_deceleration, msg.header.stamp)
                 return
         
         # Calculate steering angle and acceleration
@@ -496,29 +510,13 @@ class CombinedController(Node):
         closest_cone = max(cones, key=lambda cone: cone[1])
         return closest_cone
     
-    def publish_emergency_brake_command(self, timestamp):
-        """Publish emergency brake command when orange cones detected"""
-        msg = AckermannDriveStamped()
-        
-        msg.header.stamp = timestamp
-        msg.header.frame_id = 'base_link'
-        
-        # Emergency brake: 0 steering, 0 speed, 0 acceleration, 60.0 brake
-        msg.drive.steering_angle = 0.0
-        msg.drive.steering_angle_velocity = 0.0
-        msg.drive.speed = 0.0
-        msg.drive.acceleration = 0.0
-        msg.drive.jerk = self.emergency_brake_value  # Using jerk field for brake value
-        
-        self.command_publisher.publish(msg)
-    
     def publish_mission_completed(self):
-        """Publish mission completed flag"""
+        """Publish mission completed flag - NO EBS"""
         msg = Bool()
         msg.data = True
         self.mission_completed_publisher.publish(msg)
-        self.get_logger().info('MISSION COMPLETED FLAG SET TO TRUE - All laps finished!')
-        self.get_logger().warn(f'EMERGENCY BRAKE APPLIED: {self.emergency_brake_value}')
+        self.get_logger().info('MISSION COMPLETED FLAG SET TO TRUE - All target laps finished!')
+        self.get_logger().info('Car has slowed down and stopped safely (NO EBS activation)')
     
     def publish_steering_command(self, steering_angle, acceleration, timestamp):
         """Publish Ackermann steering command with acceleration"""
@@ -531,7 +529,7 @@ class CombinedController(Node):
         msg.drive.steering_angle_velocity = 0.0
         msg.drive.speed = self.default_speed
         msg.drive.acceleration = float(acceleration)
-        msg.drive.jerk = 0.0
+        msg.drive.jerk = 0.0  # NO EBS - jerk field stays 0
         
         self.command_publisher.publish(msg)
 
@@ -556,9 +554,9 @@ def test_mode():
     
     node.get_logger().info('TEST MODE: Fixed Combined Controller Test')
     node.get_logger().info('FIXES: Blue cones -> right turn, Yellow cones -> left turn')
-    node.get_logger().info('FIXES: Improved lap counting using orange cone movement detection')
-    node.get_logger().info('Testing lap counting for AUTOCROSS (2 laps) and TRACKDRIVE (11 laps)')
-    node.get_logger().info('Testing mission completion flag after 2 second brake')
+    node.get_logger().info('FIXES: NO EBS activation - gradual slowdown and stop when target reached')
+    node.get_logger().info('Testing lap counting for AUTOCROSS (1 lap) and TRACKDRIVE (10 laps)')
+    node.get_logger().info('Testing mission completion flag after 3 second slowdown')
     node.get_logger().info('Testing fixed steering directions and improved lap detection...')
     node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is AUTOCROSS or TRACKDRIVE')
     node.get_logger().info('Press Ctrl+C to stop')
@@ -571,7 +569,7 @@ def test_mode():
         {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
         {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration (yellow cones detected)'},
         {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
-        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test (max laps)'},
+        {'steering': 0.0, 'acceleration': -2.0, 'description': 'Mission complete - gradual slowdown (NO EBS)'},
     ]
     
     sequence_index = 0
@@ -588,14 +586,15 @@ def test_mode():
             cmd_msg.drive.steering_angle_velocity = 0.0
             cmd_msg.drive.speed = 0.0
             cmd_msg.drive.acceleration = float(test_data['acceleration'])
+            cmd_msg.drive.jerk = 0.0  # NO EBS - always 0
             
-            # Check if this is an emergency brake test
-            if 'brake' in test_data:
-                cmd_msg.drive.jerk = float(test_data['brake'])
-                status = f"EMERGENCY BRAKE: {test_data['brake']}"
+            # Check acceleration status
+            if test_data['acceleration'] > 0:
+                status = "ACCELERATING"
+            elif test_data['acceleration'] < 0:
+                status = "DECELERATING (Mission Complete)"
             else:
-                cmd_msg.drive.jerk = 0.0
-                status = "ACCELERATING" if test_data['acceleration'] > 0 else "COASTING"
+                status = "COASTING"
             
             command_publisher.publish(cmd_msg)
             
