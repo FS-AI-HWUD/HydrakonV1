@@ -5,7 +5,10 @@ from rclpy.node import Node
 from vision_msgs.msg import Detection2DArray
 from ackermann_msgs.msg import AckermannDriveStamped
 from std_msgs.msg import String, Bool
+import math
+import numpy as np
 import re
+from collections import defaultdict
 
 class CombinedController(Node):
     def should_run_controller(self):
@@ -13,8 +16,8 @@ class CombinedController(Node):
         if self.current_ami_state is None:
             return False
         
-        # Run when AMI state is AUTOCROSS or TRACKDRIVE
-        return self.current_ami_state in ['AUTOCROSS', 'TRACKDRIVE']
+        # Only run when AMI state is SKIDPAD
+        return self.current_ami_state == 'SKIDPAD'
     
     def __init__(self):
         super().__init__('combined_controller')
@@ -42,11 +45,7 @@ class CombinedController(Node):
             10
         )
         
-        self.mission_completed_publisher = self.create_publisher(
-            Bool,
-            '/hydrakon_can/is_mission_completed',
-            10
-        )
+
         
         # Camera parameters
         self.image_width = 1280
@@ -57,7 +56,6 @@ class CombinedController(Node):
         self.max_steering_angle = 0.4
         self.steering_gain = 0.003
         self.min_cone_distance = 50
-        self.estimated_track_width_pixels = 240  # Standard Formula Student track width (~3.5m) in pixels
         
         # Cone class IDs
         self.YELLOW_CONE = 0
@@ -75,24 +73,6 @@ class CombinedController(Node):
         self.current_as_state = None
         self.current_ami_state = None
         
-        # Lap counting variables
-        self.lap_count = 0
-        self.max_laps_autocross = 2
-        self.max_laps_trackdrive = 11
-        self.last_orange_gate_time = 0.0
-        self.cooldown_duration = 2.0  # 2 seconds cooldown between gate passages
-        
-        # NEW: Track orange cone positions for lap counting
-        self.previous_orange_positions = []
-        self.lap_detection_threshold = 0.7  # Threshold for detecting lap completion
-        self.min_gate_approach_distance = self.image_height * 0.6  # Orange cones must be in bottom 40% of image
-        
-        # Mission completion variables
-        self.mission_completed = False
-        self.brake_timer = None
-        self.brake_start_time = None
-        self.brake_duration = 2.0  # 2 seconds
-        
         # Last steering angle for continuity
         self.last_steering_angle = 0.0
         
@@ -100,17 +80,13 @@ class CombinedController(Node):
         self.midpoint_smoothing = 0.7  # Smoothing factor for midpoint calculation
         self.last_midpoint_x = None
         
-        self.get_logger().info('Combined Controller initialized - FIXED STEERING LOGIC')
+        self.get_logger().info('Combined Controller initialized')
         self.get_logger().info('- Camera-based steering control')
-        self.get_logger().info('- Runs when AMI state is AUTOCROSS or TRACKDRIVE')
-        self.get_logger().info('- AUTOCROSS: 2 laps max, TRACKDRIVE: 11 laps max')
-        self.get_logger().info('- Lap counting by passing through orange cones (movement-based detection)')
+        self.get_logger().info('- Runs only when AMI state is SKIDPAD')
         self.get_logger().info('- Enhanced midpoint steering between yellow and blue cones')
-        self.get_logger().info('- FIXED: Acceleration in curves - accelerates when ANY cones detected')
+        self.get_logger().info('- Acceleration when cone pairs detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
-        self.get_logger().info('- Emergency brake when max laps completed')
-        self.get_logger().info('- FIXED: Correct steering directions - when close to blue cones (right boundary), steer LEFT')
-        self.get_logger().info('- FIXED: Correct steering directions - when close to yellow cones (left boundary), steer RIGHT')
+        self.get_logger().info('- Emergency brake on orange cone detection')
         self.get_logger().info(f'Emergency brake value: {self.emergency_brake_value}')
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
@@ -136,136 +112,11 @@ class CombinedController(Node):
         as_state, ami_state = self.parse_state_string(msg.data)
         
         if as_state is not None and ami_state is not None:
-            # Reset lap count when switching modes
-            if self.current_ami_state != ami_state and ami_state in ['AUTOCROSS', 'TRACKDRIVE']:
-                self.lap_count = 0
-                self.mission_completed = False
-                self.brake_start_time = None
-                self.last_orange_gate_time = 0.0
-                self.previous_orange_positions = []  # Reset tracking
-                self.get_logger().info(f'Mode changed to {ami_state}, resetting lap count and mission status')
-            
             self.current_as_state = as_state
             self.current_ami_state = ami_state
             self.get_logger().debug(f'Updated state - AS: {as_state}, AMI: {ami_state}')
     
-    def find_closest_orange_gate(self, orange_cones):
-        """Find the closest orange gate (pair of orange cones) or single cone"""
-        if len(orange_cones) < 1:
-            return None
-        
-        # If only one orange cone, treat it as a gate
-        if len(orange_cones) == 1:
-            cone = orange_cones[0]
-            return {
-                'midpoint_x': cone[0],
-                'midpoint_y': cone[1],
-                'distance': cone[1]  # Use y-coordinate as distance (closer to bottom = closer)
-            }
-        
-        # Find pairs of orange cones that could form a gate
-        best_gate = None
-        max_distance = 0  # We want the closest gate (highest y-coordinate)
-        
-        for i in range(len(orange_cones)):
-            for j in range(i + 1, len(orange_cones)):
-                cone1 = orange_cones[i]
-                cone2 = orange_cones[j]
-                
-                # Calculate midpoint between the two cones
-                midpoint_x = (cone1[0] + cone2[0]) / 2.0
-                midpoint_y = (cone1[1] + cone2[1]) / 2.0
-                
-                # Distance is based on y-coordinate (closer to bottom = closer)
-                distance = midpoint_y
-                
-                # Check if this is a reasonable gate (cones not too far apart)
-                cone_separation = abs(cone1[0] - cone2[0])
-                if cone_separation < 300 and distance > max_distance:  # Reasonable gate width
-                    best_gate = {
-                        'midpoint_x': midpoint_x,
-                        'midpoint_y': midpoint_y,
-                        'distance': distance
-                    }
-                    max_distance = distance
-        
-        return best_gate
-    
-    def check_orange_gate_passage(self, orange_cones):
-        """Check if vehicle has passed through orange gate using movement detection"""
-        import time
-        current_time = time.time()
-        
-        # Cooldown check to prevent multiple counts for same gate
-        if current_time - self.last_orange_gate_time < self.cooldown_duration:
-            return False
-        
-        # Check if we have orange cones
-        if len(orange_cones) < 1:
-            self.previous_orange_positions = []  # Reset if no cones
-            return False
-        
-        # Find the closest orange gate
-        best_gate = self.find_closest_orange_gate(orange_cones)
-        if not best_gate:
-            return False
-        
-        current_position = {
-            'x': best_gate['midpoint_x'],
-            'y': best_gate['midpoint_y'],
-            'timestamp': current_time
-        }
-        
-        # Check if gate is close enough to the car (in bottom portion of image)
-        if best_gate['midpoint_y'] < self.min_gate_approach_distance:
-            # Gate is too far away
-            self.previous_orange_positions = []
-            return False
-        
-        # Store current position for tracking
-        self.previous_orange_positions.append(current_position)
-        
-        # Keep only recent positions (last 1 second)
-        self.previous_orange_positions = [
-            pos for pos in self.previous_orange_positions 
-            if current_time - pos['timestamp'] < 1.0
-        ]
-        
-        # Check if we have enough data points to detect passage
-        if len(self.previous_orange_positions) < 3:
-            return False
-        
-        # Check if orange gate has moved towards the car significantly
-        # (y-coordinate should increase over time as gate approaches)
-        positions = self.previous_orange_positions
-        y_positions = [pos['y'] for pos in positions]
-        
-        # Calculate movement trend
-        if len(y_positions) >= 3:
-            early_y = sum(y_positions[:len(y_positions)//2]) / (len(y_positions)//2)
-            recent_y = sum(y_positions[len(y_positions)//2:]) / (len(y_positions) - len(y_positions)//2)
-            
-            # Movement towards camera (increasing y) indicates passage
-            movement = recent_y - early_y
-            
-            self.get_logger().debug(f"Orange gate movement: {movement:.2f} pixels (early: {early_y:.1f}, recent: {recent_y:.1f})")
-            
-            # If gate has moved significantly towards camera and is now close
-            if movement > 50 and recent_y > self.image_height * 0.7:
-                self.last_orange_gate_time = current_time
-                self.previous_orange_positions = []  # Reset tracking
-                self.get_logger().info(f"GATE PASSAGE DETECTED: Movement {movement:.1f} pixels, final position y={recent_y:.1f}")
-                return True
-        
-        return False
-    
-    def check_lap_completion(self):
-        """Check if maximum laps have been completed"""
-        if self.current_ami_state == 'AUTOCROSS':
-            return self.lap_count >= self.max_laps_autocross
-        elif self.current_ami_state == 'TRACKDRIVE':
-            return self.lap_count >= self.max_laps_trackdrive
-        return False
+
     
     def detection_callback(self, msg):
         """Process camera detections and calculate steering angle"""
@@ -292,71 +143,40 @@ class CombinedController(Node):
                     elif class_id == self.ORANGE_CONE or class_id == self.LARGE_ORANGE_CONE:
                         orange_cones.append((center_x, center_y, confidence))
         
-        # Check for orange gate passage - LAP COUNTING OR FINISH
+        # Check for orange cones (finish line) - EMERGENCY BRAKE
         if len(orange_cones) > 0:
-            if self.check_orange_gate_passage(orange_cones):
-                # Check if we've completed maximum laps
-                if self.check_lap_completion():
-                    if not self.mission_completed:
-                        self.get_logger().warn(f'MAX LAPS COMPLETED! EMERGENCY BRAKE - {self.lap_count} laps done')
-                        self.mission_completed = True
-                        self.brake_start_time = self.get_clock().now()
-                        self.publish_emergency_brake_command(msg.header.stamp)
-                    return
-                else:
-                    # Count a lap
-                    self.lap_count += 1
-                    max_laps = self.max_laps_autocross if self.current_ami_state == 'AUTOCROSS' else self.max_laps_trackdrive
-                    self.get_logger().info(f'LAP {self.lap_count} COMPLETED! Passed through orange gate ({self.lap_count}/{max_laps} laps in {self.current_ami_state} mode)')
-        
-        # Handle mission completion sequence
-        if self.mission_completed and self.brake_start_time is not None:
-            current_time = self.get_clock().now()
-            elapsed_time = (current_time - self.brake_start_time).nanoseconds / 1e9
-            
-            if elapsed_time >= self.brake_duration:
-                # 2 seconds have passed, set mission completed flag
-                self.publish_mission_completed()
-                self.brake_start_time = None  # Prevent repeated publishing
-                return
-            else:
-                # Still in brake period, continue braking
-                self.publish_emergency_brake_command(msg.header.stamp)
-                return
+            self.get_logger().warn(f'ORANGE CONES DETECTED! EMERGENCY BRAKE - {len(orange_cones)} orange cones found')
+            self.publish_emergency_brake_command(msg.header.stamp)
+            return
         
         # Calculate steering angle and acceleration
         steering_angle = self.calculate_steering_angle(yellow_cones, blue_cones)
         acceleration = self.calculate_acceleration(yellow_cones, blue_cones)
         
-        # Only publish steering commands if AMI state is AUTOCROSS or TRACKDRIVE
+        # Only publish steering commands if AMI state is SKIDPAD
         if self.should_run_controller():
             self.publish_steering_command(steering_angle, acceleration, msg.header.stamp)
             
             # Log detection info
             if len(yellow_cones) > 0 or len(blue_cones) > 0:
                 accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
-                max_laps = self.max_laps_autocross if self.current_ami_state == 'AUTOCROSS' else self.max_laps_trackdrive
-                self.get_logger().info(f'{self.current_ami_state} ACTIVE (Lap {self.lap_count}/{max_laps}): {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
+                self.get_logger().info(f'SKIDPAD ACTIVE: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
         else:
-            # Send zero steering and acceleration when not in AUTOCROSS/TRACKDRIVE mode
+            # Send zero steering and acceleration when not in SKIDPAD mode
             self.publish_steering_command(0.0, 0.0, msg.header.stamp)
             if len(yellow_cones) > 0 or len(blue_cones) > 0:
-                self.get_logger().debug(f'NOT RACING: Cones detected but AMI state is {self.current_ami_state}, not running controller')
+                self.get_logger().debug(f'NOT SKIDPAD: Cones detected but AMI state is {self.current_ami_state}, not running controller')
     
     def calculate_acceleration(self, yellow_cones, blue_cones):
-        """Calculate acceleration based on cone detection - FIXED to accelerate in curves"""
-        
-        # FIXED: Accelerate when ANY cones are detected (not just pairs)
-        # This allows acceleration through curves where only one cone type is visible
-        
-        # Case 1: Both yellow and blue cones detected - MAXIMUM ACCELERATION
+        """Calculate acceleration based on cone detection with enhanced position validation"""
+        # Only accelerate when both yellow and blue cones are detected
         if len(yellow_cones) > 0 and len(blue_cones) > 0:
             # Find closest cones for position validation
             closest_yellow = self.find_closest_cone(yellow_cones)
             closest_blue = self.find_closest_cone(blue_cones)
             
             if closest_yellow is None or closest_blue is None:
-                return self.cone_pair_acceleration * 0.8  # Still accelerate even if validation fails
+                return self.default_acceleration
             
             yellow_x = closest_yellow[0]
             blue_x = closest_blue[0]
@@ -368,35 +188,19 @@ class CombinedController(Node):
             if abs(yellow_x - blue_x) > separation_threshold:
                 # Check if yellow is generally on the left side of blue
                 if yellow_x < blue_x:
-                    self.get_logger().debug(f'Valid cone pair: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - MAX ACCELERATION')
-                    return self.cone_pair_acceleration  # Full acceleration
+                    self.get_logger().debug(f'Valid cone pair: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - ACCELERATING')
+                    return self.cone_pair_acceleration
                 else:
-                    self.get_logger().debug(f'Reversed cone positioning: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f} - Good acceleration')
-                    return self.cone_pair_acceleration * 0.8  # Still good acceleration
+                    self.get_logger().debug(f'Reversed cone positioning: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f} - Slow acceleration')
+                    return self.cone_pair_acceleration * 0.5  # Reduced acceleration for unclear positioning
             else:
-                self.get_logger().debug(f'Cones close together: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - Good acceleration')
-                return self.cone_pair_acceleration * 0.8  # Good acceleration when cones are close
-        
-        # Case 2: Only yellow cones detected - CURVE ACCELERATION (left curve)
-        elif len(yellow_cones) > 0:
-            closest_yellow = self.find_closest_cone(yellow_cones)
-            if closest_yellow is not None:
-                self.get_logger().debug(f'Yellow cones only: Yellow at {closest_yellow[0]:.1f} - CURVE ACCELERATION (left curve)')
-                return self.cone_pair_acceleration * 0.7  # Good acceleration through left curves
-            
-        # Case 3: Only blue cones detected - CURVE ACCELERATION (right curve)
-        elif len(blue_cones) > 0:
-            closest_blue = self.find_closest_cone(blue_cones)
-            if closest_blue is not None:
-                self.get_logger().debug(f'Blue cones only: Blue at {closest_blue[0]:.1f} - CURVE ACCELERATION (right curve)')
-                return self.cone_pair_acceleration * 0.7  # Good acceleration through right curves
-        
-        # Case 4: No cones detected - COAST/MAINTAIN SPEED
-        self.get_logger().debug('No cones detected - COASTING')
-        return self.default_acceleration
+                self.get_logger().debug(f'Cones too close: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}, separation: {abs(yellow_x-blue_x):.1f} - Normal acceleration')
+                return self.cone_pair_acceleration * 0.7  # Moderate acceleration when cones are close
+        else:
+            return self.default_acceleration
     
     def calculate_steering_angle(self, yellow_cones, blue_cones):
-        """Calculate steering angle with enhanced midpoint targeting - FIXED STEERING DIRECTIONS"""
+        """Calculate steering angle with enhanced midpoint targeting"""
         
         # If no cones detected, return last steering angle for continuity
         if len(yellow_cones) == 0 and len(blue_cones) == 0:
@@ -434,42 +238,36 @@ class CombinedController(Node):
                 self.get_logger().debug(f'Midpoint steering: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}')
                 self.get_logger().debug(f'Raw midpoint: {raw_midpoint:.1f}, Smoothed target: {target_x:.1f}')
         
-        # Case 2: Only yellow cones detected - LEFT TURN (following left curve)
+        # Case 2: Only yellow cones detected
         elif len(yellow_cones) > 0:
             closest_yellow = self.find_closest_cone(yellow_cones)
             if closest_yellow is not None:
                 yellow_x = closest_yellow[0]
                 
-                # FIXED: Using exact logic from your working code
-                # When seeing yellow cones, aim RIGHT of yellow to stay on track
-                estimated_track_width_pixels = 240  # From your working code
-                target_x = yellow_x + (estimated_track_width_pixels / 2)  # RIGHT of yellow
+                # Target point is to the right of yellow cone (assuming yellow is left boundary)
+                offset = 120  # Increased offset for better track following
+                target_x = yellow_x + offset
                 
-                steering_mode = "yellow_right_target"
-                self.get_logger().debug(f'Yellow cones: Yellow at {yellow_x:.1f}, Target (right of yellow): {target_x:.1f}')
+                steering_mode = "yellow_only"
+                self.get_logger().debug(f'Yellow-only steering: Yellow at {yellow_x:.1f}, Target: {target_x:.1f}')
         
-        # Case 3: Only blue cones detected - RIGHT TURN (following right curve)
+        # Case 3: Only blue cones detected
         elif len(blue_cones) > 0:
             closest_blue = self.find_closest_cone(blue_cones)
             if closest_blue is not None:
                 blue_x = closest_blue[0]
                 
-                # FIXED: Using exact logic from your working code  
-                # When seeing blue cones, aim LEFT of blue to stay on track
-                estimated_track_width_pixels = 240  # From your working code
-                target_x = blue_x - (estimated_track_width_pixels / 2)  # LEFT of blue
+                # Target point is to the left of blue cone (assuming blue is right boundary)
+                offset = 120  # Increased offset for better track following
+                target_x = blue_x - offset
                 
-                steering_mode = "blue_left_target"
-                self.get_logger().debug(f'Blue cones: Blue at {blue_x:.1f}, Target (left of blue): {target_x:.1f}')
+                steering_mode = "blue_only"
+                self.get_logger().debug(f'Blue-only steering: Blue at {blue_x:.1f}, Target: {target_x:.1f}')
         
         # Convert target position to steering angle
         if target_x is not None:
-            # Convert target position to steering angle
             error_pixels = target_x - self.image_center_x
-            # FIXED: Using the working logic from your original code (NO negative sign)
-            # Positive error (target right of center) -> positive steering (turn right)
-            # Negative error (target left of center) -> negative steering (turn left)
-            steering_angle = error_pixels * self.steering_gain  # No negative sign!
+            steering_angle = -error_pixels * self.steering_gain
             
             # Apply steering angle limits
             steering_angle = max(-self.max_steering_angle, 
@@ -478,13 +276,8 @@ class CombinedController(Node):
             # Store for continuity
             self.last_steering_angle = steering_angle
             
-            # Enhanced logging with direction explanation
-            direction = "RIGHT" if steering_angle > 0 else "LEFT" if steering_angle < 0 else "STRAIGHT"
-            self.get_logger().debug(f'STEERING CALCULATION:')
-            self.get_logger().debug(f'  Mode: {steering_mode}')
-            self.get_logger().debug(f'  Target X: {target_x:.1f} px, Center X: {self.image_center_x} px')
-            self.get_logger().debug(f'  Error: {error_pixels:.1f} px (positive = target right of center)')
-            self.get_logger().debug(f'  Steering Angle: {steering_angle:.3f} rad -> Turn {direction}')
+            # Log steering decision
+            self.get_logger().debug(f'Steering calculation: Mode={steering_mode}, Target={target_x:.1f}, Error={error_pixels:.1f}, Angle={steering_angle:.3f}')
             
             return steering_angle
         
@@ -517,13 +310,6 @@ class CombinedController(Node):
         msg.drive.jerk = self.emergency_brake_value  # Using jerk field for brake value
         
         self.command_publisher.publish(msg)
-    
-    def publish_mission_completed(self):
-        """Publish mission completed flag"""
-        msg = Bool()
-        msg.data = True
-        self.mission_completed_publisher.publish(msg)
-        self.get_logger().info('MISSION COMPLETED FLAG SET TO TRUE - All laps finished!')
         self.get_logger().warn(f'EMERGENCY BRAKE APPLIED: {self.emergency_brake_value}')
     
     def publish_steering_command(self, steering_angle, acceleration, timestamp):
@@ -542,7 +328,7 @@ class CombinedController(Node):
         self.command_publisher.publish(msg)
 
 def test_mode():
-    """Test mode - sends test messages demonstrating correct steering logic"""
+    """Test mode - sends test messages for both driving flag and steering with acceleration"""
     rclpy.init()
     
     node = Node('combined_controller_test')
@@ -554,29 +340,20 @@ def test_mode():
         10
     )
     
-    mission_completed_publisher = node.create_publisher(
-        Bool,
-        '/hydrakon_can/is_mission_completed',
-        10
-    )
-    
-    node.get_logger().info('TEST MODE: FIXED Combined Controller Test - Correct Steering Logic')
-    node.get_logger().info('STEERING LOGIC FIXED:')
-    node.get_logger().info('- When close to BLUE cones (right boundary) -> Steer LEFT (negative angle)')
-    node.get_logger().info('- When close to YELLOW cones (left boundary) -> Steer RIGHT (positive angle)')
-    node.get_logger().info('- Midpoint steering works correctly between boundaries')
-    node.get_logger().info('Testing correct steering directions and improved lap detection...')
+    node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Midpoint Steering')
+    node.get_logger().info('Testing midpoint steering, acceleration, and emergency brake...')
+    node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is SKIDPAD')
     node.get_logger().info('Press Ctrl+C to stop')
     
     import time
     test_sequence = [
-        {'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead - no cones'},
-        {'steering': -0.1, 'acceleration': 0.9, 'description': 'LEFT turn - close to blue cones (right boundary)'},
-        {'steering': -0.2, 'acceleration': 0.7, 'description': 'Sharp LEFT - very close to blue cones'},
-        {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight - midpoint between yellow and blue'},
-        {'steering': 0.1, 'acceleration': 0.9, 'description': 'RIGHT turn - close to yellow cones (left boundary)'},
-        {'steering': 0.2, 'acceleration': 0.7, 'description': 'Sharp RIGHT - very close to yellow cones'},
-        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake - max laps completed'},
+        {'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead'},
+        {'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration'},
+        {'steering': 0.2, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
+        {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
+        {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
+        {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
+        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test'},
     ]
     
     sequence_index = 0
@@ -604,18 +381,10 @@ def test_mode():
             
             command_publisher.publish(cmd_msg)
             
-            direction_info = ""
-            if test_data['steering'] > 0:
-                direction_info = " (STEERING RIGHT)"
-            elif test_data['steering'] < 0:
-                direction_info = " (STEERING LEFT)"
-            else:
-                direction_info = " (STRAIGHT)"
-            
-            node.get_logger().info(f'Published - {test_data["description"]}: Steering: {test_data["steering"]:.1f} rad{direction_info}, {status}')
+            node.get_logger().info(f'Published - {test_data["description"]}: Steering: {test_data["steering"]:.1f} rad, {status}')
             
             sequence_index += 1
-            time.sleep(3.0)  # Longer delay to see the test sequence clearly
+            time.sleep(2.0)
             rclpy.spin_once(node, timeout_sec=0.1)
             
     except KeyboardInterrupt:
@@ -641,8 +410,7 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) == 1 or '--test' in sys.argv:
-        print("Running in TEST MODE - testing FIXED steering directions")
-        print("CORRECT LOGIC: Close to blue cones -> steer LEFT, Close to yellow cones -> steer RIGHT")
+        print("Running in TEST MODE - testing steering, acceleration, and emergency brake")
         print("Use 'ros2 run <package> <node>' for normal operation")
         test_mode()
     else:
