@@ -56,6 +56,7 @@ class CombinedController(Node):
         self.max_steering_angle = 0.4
         self.steering_gain = 0.003
         self.min_cone_distance = 50
+        self.estimated_track_width_pixels = 240  # Standard Formula Student track width (~3.5m) in pixels
         
         # Cone class IDs
         self.YELLOW_CONE = 0
@@ -84,10 +85,9 @@ class CombinedController(Node):
         self.get_logger().info('- Camera-based steering control')
         self.get_logger().info('- Runs only when AMI state is SKIDPAD')
         self.get_logger().info('- Enhanced midpoint steering between yellow and blue cones')
+        self.get_logger().info('- Improved sharp turn steering for single-color detection')
         self.get_logger().info('- Acceleration when cone pairs detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
-        self.get_logger().info('- Emergency brake on orange cone detection')
-        self.get_logger().info(f'Emergency brake value: {self.emergency_brake_value}')
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
         self.get_logger().info(f'Cone pair acceleration: {self.cone_pair_acceleration}')
@@ -143,12 +143,6 @@ class CombinedController(Node):
                     elif class_id == self.ORANGE_CONE or class_id == self.LARGE_ORANGE_CONE:
                         orange_cones.append((center_x, center_y, confidence))
         
-        # Check for orange cones (finish line) - EMERGENCY BRAKE
-        if len(orange_cones) > 0:
-            self.get_logger().warn(f'ORANGE CONES DETECTED! EMERGENCY BRAKE - {len(orange_cones)} orange cones found')
-            self.publish_emergency_brake_command(msg.header.stamp)
-            return
-        
         # Calculate steering angle and acceleration
         steering_angle = self.calculate_steering_angle(yellow_cones, blue_cones)
         acceleration = self.calculate_acceleration(yellow_cones, blue_cones)
@@ -161,6 +155,10 @@ class CombinedController(Node):
             if len(yellow_cones) > 0 or len(blue_cones) > 0:
                 accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
                 self.get_logger().info(f'SKIDPAD ACTIVE: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
+            
+            # Log orange cone detection (but no action taken)
+            if len(orange_cones) > 0:
+                self.get_logger().debug(f'Orange cones detected: {len(orange_cones)} (no action taken)')
         else:
             # Send zero steering and acceleration when not in SKIDPAD mode
             self.publish_steering_command(0.0, 0.0, msg.header.stamp)
@@ -200,7 +198,7 @@ class CombinedController(Node):
             return self.default_acceleration
     
     def calculate_steering_angle(self, yellow_cones, blue_cones):
-        """Calculate steering angle with enhanced midpoint targeting"""
+        """Calculate steering angle with enhanced midpoint targeting and sharp turn logic"""
         
         # If no cones detected, return last steering angle for continuity
         if len(yellow_cones) == 0 and len(blue_cones) == 0:
@@ -238,31 +236,29 @@ class CombinedController(Node):
                 self.get_logger().debug(f'Midpoint steering: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}')
                 self.get_logger().debug(f'Raw midpoint: {raw_midpoint:.1f}, Smoothed target: {target_x:.1f}')
         
-        # Case 2: Only yellow cones detected
+        # Case 2: Only yellow cones detected - LEFT TURN, follow curvature
         elif len(yellow_cones) > 0:
             closest_yellow = self.find_closest_cone(yellow_cones)
             if closest_yellow is not None:
                 yellow_x = closest_yellow[0]
                 
-                # Target point is to the right of yellow cone (assuming yellow is left boundary)
-                offset = 120  # Increased offset for better track following
-                target_x = yellow_x + offset
+                # Estimate track width and aim for centerline with left offset
+                target_x = yellow_x + (self.estimated_track_width_pixels / 2)  # Aim for center of track
                 
-                steering_mode = "yellow_only"
-                self.get_logger().debug(f'Yellow-only steering: Yellow at {yellow_x:.1f}, Target: {target_x:.1f}')
+                steering_mode = "yellow_curvature"
+                self.get_logger().debug(f'Yellow curvature steering: Yellow at {yellow_x:.1f}, Target centerline: {target_x:.1f}')
         
-        # Case 3: Only blue cones detected
+        # Case 3: Only blue cones detected - RIGHT TURN, follow curvature
         elif len(blue_cones) > 0:
             closest_blue = self.find_closest_cone(blue_cones)
             if closest_blue is not None:
                 blue_x = closest_blue[0]
                 
-                # Target point is to the left of blue cone (assuming blue is right boundary)
-                offset = 120  # Increased offset for better track following
-                target_x = blue_x - offset
+                # Estimate track width and aim for centerline with right offset
+                target_x = blue_x - (self.estimated_track_width_pixels / 2)  # Aim for center of track
                 
-                steering_mode = "blue_only"
-                self.get_logger().debug(f'Blue-only steering: Blue at {blue_x:.1f}, Target: {target_x:.1f}')
+                steering_mode = "blue_curvature"
+                self.get_logger().debug(f'Blue curvature steering: Blue at {blue_x:.1f}, Target centerline: {target_x:.1f}')
         
         # Convert target position to steering angle
         if target_x is not None:
@@ -295,23 +291,6 @@ class CombinedController(Node):
         closest_cone = max(cones, key=lambda cone: cone[1])
         return closest_cone
     
-    def publish_emergency_brake_command(self, timestamp):
-        """Publish emergency brake command when orange cones detected"""
-        msg = AckermannDriveStamped()
-        
-        msg.header.stamp = timestamp
-        msg.header.frame_id = 'base_link'
-        
-        # Emergency brake: 0 steering, 0 speed, 0 acceleration, 60.0 brake
-        msg.drive.steering_angle = 0.0
-        msg.drive.steering_angle_velocity = 0.0
-        msg.drive.speed = 0.0
-        msg.drive.acceleration = 0.0
-        msg.drive.jerk = self.emergency_brake_value  # Using jerk field for brake value
-        
-        self.command_publisher.publish(msg)
-        self.get_logger().warn(f'EMERGENCY BRAKE APPLIED: {self.emergency_brake_value}')
-    
     def publish_steering_command(self, steering_angle, acceleration, timestamp):
         """Publish Ackermann steering command with acceleration"""
         msg = AckermannDriveStamped()
@@ -340,8 +319,8 @@ def test_mode():
         10
     )
     
-    node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Midpoint Steering')
-    node.get_logger().info('Testing midpoint steering, acceleration, and emergency brake...')
+    node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Steering')
+    node.get_logger().info('Testing midpoint steering, sharp turn curvature following, and acceleration...')
     node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is SKIDPAD')
     node.get_logger().info('Press Ctrl+C to stop')
     
@@ -353,7 +332,7 @@ def test_mode():
         {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
         {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration'},
         {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
-        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test'},
+        {'steering': 0.0, 'acceleration': 0.0, 'description': 'Coast to stop'},
     ]
     
     sequence_index = 0
@@ -362,7 +341,7 @@ def test_mode():
         while rclpy.ok():
             test_data = test_sequence[sequence_index % len(test_sequence)]
             
-            # Publish steering command with acceleration or brake
+            # Publish steering command with acceleration
             cmd_msg = AckermannDriveStamped()
             cmd_msg.header.stamp = node.get_clock().now().to_msg()
             cmd_msg.header.frame_id = 'base_link'
@@ -370,14 +349,9 @@ def test_mode():
             cmd_msg.drive.steering_angle_velocity = 0.0
             cmd_msg.drive.speed = 0.0
             cmd_msg.drive.acceleration = float(test_data['acceleration'])
+            cmd_msg.drive.jerk = 0.0
             
-            # Check if this is an emergency brake test
-            if 'brake' in test_data:
-                cmd_msg.drive.jerk = float(test_data['brake'])
-                status = f"EMERGENCY BRAKE: {test_data['brake']}"
-            else:
-                cmd_msg.drive.jerk = 0.0
-                status = "ACCELERATING" if test_data['acceleration'] > 0 else "COASTING"
+            status = "ACCELERATING" if test_data['acceleration'] > 0 else "COASTING"
             
             command_publisher.publish(cmd_msg)
             
@@ -410,7 +384,7 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) == 1 or '--test' in sys.argv:
-        print("Running in TEST MODE - testing steering, acceleration, and emergency brake")
+        print("Running in TEST MODE - testing steering, acceleration, and sharp turn logic")
         print("Use 'ros2 run <package> <node>' for normal operation")
         test_mode()
     else:
