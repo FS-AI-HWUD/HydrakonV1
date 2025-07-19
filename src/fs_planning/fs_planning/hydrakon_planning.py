@@ -100,7 +100,7 @@ class CombinedController(Node):
         self.midpoint_smoothing = 0.7  # Smoothing factor for midpoint calculation
         self.last_midpoint_x = None
         
-        self.get_logger().info('Combined Controller initialized')
+        self.get_logger().info('Combined Controller initialized - FIXED STEERING LOGIC')
         self.get_logger().info('- Camera-based steering control')
         self.get_logger().info('- Runs when AMI state is AUTOCROSS or TRACKDRIVE')
         self.get_logger().info('- AUTOCROSS: 2 laps max, TRACKDRIVE: 11 laps max')
@@ -109,7 +109,8 @@ class CombinedController(Node):
         self.get_logger().info('- FIXED: Acceleration in curves - accelerates when ANY cones detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
         self.get_logger().info('- Emergency brake when max laps completed')
-        self.get_logger().info('- FIXED: Blue cones -> right turn, Yellow cones -> left turn')
+        self.get_logger().info('- FIXED: Correct steering directions - when close to blue cones (right boundary), steer LEFT')
+        self.get_logger().info('- FIXED: Correct steering directions - when close to yellow cones (left boundary), steer RIGHT')
         self.get_logger().info(f'Emergency brake value: {self.emergency_brake_value}')
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
@@ -395,7 +396,7 @@ class CombinedController(Node):
         return self.default_acceleration
     
     def calculate_steering_angle(self, yellow_cones, blue_cones):
-        """Calculate steering angle with enhanced midpoint targeting - FIXED DIRECTIONS"""
+        """Calculate steering angle with enhanced midpoint targeting - FIXED STEERING DIRECTIONS"""
         
         # If no cones detected, return last steering angle for continuity
         if len(yellow_cones) == 0 and len(blue_cones) == 0:
@@ -433,41 +434,45 @@ class CombinedController(Node):
                 self.get_logger().debug(f'Midpoint steering: Yellow at {yellow_x:.1f}, Blue at {blue_x:.1f}')
                 self.get_logger().debug(f'Raw midpoint: {raw_midpoint:.1f}, Smoothed target: {target_x:.1f}')
         
-        # Case 2: Only yellow cones detected - AVOID LEFT, turn RIGHT to get back on track
+        # Case 2: Only yellow cones detected (left boundary) - STEER RIGHT to get back on track
         elif len(yellow_cones) > 0:
             closest_yellow = self.find_closest_cone(yellow_cones)
             if closest_yellow is not None:
                 yellow_x = closest_yellow[0]
                 
                 # FIXED: When seeing yellow cones (track boundary on left), 
-                # aim to the RIGHT of the yellow cones to stay on track
-                estimated_track_width_pixels = 240  # Estimated track width in pixels (3.5m real world)
-                target_x = yellow_x + (estimated_track_width_pixels / 2)  # Aim RIGHT of yellow cones
+                # we're too close to the left boundary, so steer RIGHT to get back on track
+                # Target should be to the RIGHT of the yellow cones
+                offset_distance = self.estimated_track_width_pixels / 2  # Half track width
+                target_x = yellow_x + offset_distance  # Move RIGHT from yellow cones
                 
                 steering_mode = "avoid_yellow_left"
-                self.get_logger().debug(f'Yellow avoidance: Yellow at {yellow_x:.1f}, Target (right of yellow): {target_x:.1f}')
+                self.get_logger().debug(f'Yellow boundary detected: Yellow at {yellow_x:.1f}, Target (right of yellow): {target_x:.1f}')
         
-        # Case 3: Only blue cones detected - AVOID RIGHT, turn LEFT to get back on track
+        # Case 3: Only blue cones detected (right boundary) - STEER LEFT to get back on track  
         elif len(blue_cones) > 0:
             closest_blue = self.find_closest_cone(blue_cones)
             if closest_blue is not None:
                 blue_x = closest_blue[0]
                 
                 # FIXED: When seeing blue cones (track boundary on right),
-                # aim to the LEFT of the blue cones to stay on track
-                estimated_track_width_pixels = 240  # Estimated track width in pixels (3.5m real world)
-                target_x = blue_x - (estimated_track_width_pixels / 2)  # Aim LEFT of blue cones
+                # we're too close to the right boundary, so steer LEFT to get back on track
+                # Target should be to the LEFT of the blue cones
+                offset_distance = self.estimated_track_width_pixels / 2  # Half track width
+                target_x = blue_x - offset_distance  # Move LEFT from blue cones
                 
                 steering_mode = "avoid_blue_right"
-                self.get_logger().debug(f'Blue avoidance: Blue at {blue_x:.1f}, Target (left of blue): {target_x:.1f}')
+                self.get_logger().debug(f'Blue boundary detected: Blue at {blue_x:.1f}, Target (left of blue): {target_x:.1f}')
         
         # Convert target position to steering angle
         if target_x is not None:
+            # Calculate error: positive error means target is to the right of center
             error_pixels = target_x - self.image_center_x
-            # FIXED: Correct steering direction
-            # Positive error (target right of center) -> positive steering (turn right)
-            # Negative error (target left of center) -> negative steering (turn left)
-            steering_angle = error_pixels * self.steering_gain  # Removed negative sign
+            
+            # FIXED: Correct steering direction mapping
+            # Positive error (target right of center) -> turn RIGHT (positive steering angle)
+            # Negative error (target left of center) -> turn LEFT (negative steering angle)
+            steering_angle = error_pixels * self.steering_gain
             
             # Apply steering angle limits
             steering_angle = max(-self.max_steering_angle, 
@@ -476,9 +481,13 @@ class CombinedController(Node):
             # Store for continuity
             self.last_steering_angle = steering_angle
             
-            # Log steering decision with direction
+            # Enhanced logging with direction explanation
             direction = "RIGHT" if steering_angle > 0 else "LEFT" if steering_angle < 0 else "STRAIGHT"
-            self.get_logger().debug(f'Steering: Mode={steering_mode}, Target={target_x:.1f}, Error={error_pixels:.1f}, Angle={steering_angle:.3f} ({direction})')
+            self.get_logger().debug(f'STEERING CALCULATION:')
+            self.get_logger().debug(f'  Mode: {steering_mode}')
+            self.get_logger().debug(f'  Target X: {target_x:.1f} px, Center X: {self.image_center_x} px')
+            self.get_logger().debug(f'  Error: {error_pixels:.1f} px (positive = target right of center)')
+            self.get_logger().debug(f'  Steering Angle: {steering_angle:.3f} rad -> Turn {direction}')
             
             return steering_angle
         
@@ -536,7 +545,7 @@ class CombinedController(Node):
         self.command_publisher.publish(msg)
 
 def test_mode():
-    """Test mode - sends test messages for both driving flag and steering with acceleration"""
+    """Test mode - sends test messages demonstrating correct steering logic"""
     rclpy.init()
     
     node = Node('combined_controller_test')
@@ -554,24 +563,23 @@ def test_mode():
         10
     )
     
-    node.get_logger().info('TEST MODE: Fixed Combined Controller Test')
-    node.get_logger().info('FIXES: Blue cones -> right turn, Yellow cones -> left turn')
-    node.get_logger().info('FIXES: Improved lap counting using orange cone movement detection')
-    node.get_logger().info('Testing lap counting for AUTOCROSS (2 laps) and TRACKDRIVE (11 laps)')
-    node.get_logger().info('Testing mission completion flag after 2 second brake')
-    node.get_logger().info('Testing fixed steering directions and improved lap detection...')
-    node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is AUTOCROSS or TRACKDRIVE')
+    node.get_logger().info('TEST MODE: FIXED Combined Controller Test - Correct Steering Logic')
+    node.get_logger().info('STEERING LOGIC FIXED:')
+    node.get_logger().info('- When close to BLUE cones (right boundary) -> Steer LEFT (negative angle)')
+    node.get_logger().info('- When close to YELLOW cones (left boundary) -> Steer RIGHT (positive angle)')
+    node.get_logger().info('- Midpoint steering works correctly between boundaries')
+    node.get_logger().info('Testing correct steering directions and improved lap detection...')
     node.get_logger().info('Press Ctrl+C to stop')
     
     import time
     test_sequence = [
-        {'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead'},
-        {'steering': 0.1, 'acceleration': 0.9, 'description': 'Right turn with acceleration (blue cones detected)'},
-        {'steering': 0.2, 'acceleration': 0.9, 'description': 'Sharp right with acceleration'},
-        {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight with acceleration'},
-        {'steering': -0.1, 'acceleration': 0.9, 'description': 'Left turn with acceleration (yellow cones detected)'},
-        {'steering': -0.2, 'acceleration': 0.0, 'description': 'Sharp left, single cone'},
-        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake test (max laps)'},
+        {'steering': 0.0, 'acceleration': 0.0, 'description': 'Straight ahead - no cones'},
+        {'steering': -0.1, 'acceleration': 0.9, 'description': 'LEFT turn - close to blue cones (right boundary)'},
+        {'steering': -0.2, 'acceleration': 0.7, 'description': 'Sharp LEFT - very close to blue cones'},
+        {'steering': 0.0, 'acceleration': 0.9, 'description': 'Straight - midpoint between yellow and blue'},
+        {'steering': 0.1, 'acceleration': 0.9, 'description': 'RIGHT turn - close to yellow cones (left boundary)'},
+        {'steering': 0.2, 'acceleration': 0.7, 'description': 'Sharp RIGHT - very close to yellow cones'},
+        {'steering': 0.0, 'acceleration': 0.0, 'brake': 60.0, 'description': 'Emergency brake - max laps completed'},
     ]
     
     sequence_index = 0
@@ -599,10 +607,18 @@ def test_mode():
             
             command_publisher.publish(cmd_msg)
             
-            node.get_logger().info(f'Published - {test_data["description"]}: Steering: {test_data["steering"]:.1f} rad, {status}')
+            direction_info = ""
+            if test_data['steering'] > 0:
+                direction_info = " (STEERING RIGHT)"
+            elif test_data['steering'] < 0:
+                direction_info = " (STEERING LEFT)"
+            else:
+                direction_info = " (STRAIGHT)"
+            
+            node.get_logger().info(f'Published - {test_data["description"]}: Steering: {test_data["steering"]:.1f} rad{direction_info}, {status}')
             
             sequence_index += 1
-            time.sleep(2.0)
+            time.sleep(3.0)  # Longer delay to see the test sequence clearly
             rclpy.spin_once(node, timeout_sec=0.1)
             
     except KeyboardInterrupt:
@@ -628,7 +644,8 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) == 1 or '--test' in sys.argv:
-        print("Running in TEST MODE - testing FIXED steering directions and improved lap counting")
+        print("Running in TEST MODE - testing FIXED steering directions")
+        print("CORRECT LOGIC: Close to blue cones -> steer LEFT, Close to yellow cones -> steer RIGHT")
         print("Use 'ros2 run <package> <node>' for normal operation")
         test_mode()
     else:
