@@ -9,6 +9,7 @@ import math
 import numpy as np
 import re
 from collections import defaultdict
+import time
 
 class CombinedController(Node):
     def should_run_controller(self):
@@ -74,6 +75,10 @@ class CombinedController(Node):
         self.current_as_state = None
         self.current_ami_state = None
         
+        # Orange cone ignore timer
+        self.start_time = time.time()
+        self.orange_ignore_duration = 5.0  # Ignore orange cones for first 5 seconds
+        
         # Last steering angle for continuity
         self.last_steering_angle = 0.0
         
@@ -88,6 +93,7 @@ class CombinedController(Node):
         self.get_logger().info('- Improved sharp turn steering for single-color detection')
         self.get_logger().info('- Acceleration when cone pairs detected')
         self.get_logger().info('- Position validation: Yellow left, Blue right')
+        self.get_logger().info(f'- Orange cones ignored for first {self.orange_ignore_duration} seconds')
         self.get_logger().info(f'Image dimensions: {self.image_width}x{self.image_height}')
         self.get_logger().info(f'Steering gain: {self.steering_gain}, Max angle: {self.max_steering_angle}')
         self.get_logger().info(f'Cone pair acceleration: {self.cone_pair_acceleration}')
@@ -116,7 +122,15 @@ class CombinedController(Node):
             self.current_ami_state = ami_state
             self.get_logger().debug(f'Updated state - AS: {as_state}, AMI: {ami_state}')
     
-
+    def should_ignore_orange_cones(self):
+        """Check if orange cones should be ignored (first 5 seconds)"""
+        current_time = time.time()
+        elapsed_time = current_time - self.start_time
+        
+        if elapsed_time < self.orange_ignore_duration:
+            return True
+        else:
+            return False
     
     def detection_callback(self, msg):
         """Process camera detections and calculate steering angle"""
@@ -156,9 +170,15 @@ class CombinedController(Node):
                 accel_status = "ACCELERATING" if acceleration > 0 else "COASTING"
                 self.get_logger().info(f'SKIDPAD ACTIVE: {len(yellow_cones)} yellow, {len(blue_cones)} blue cones. Steering: {steering_angle:.3f} rad, {accel_status}: {acceleration:.1f}')
             
-            # Log orange cone detection (but no action taken)
+            # Log orange cone detection with ignore status
             if len(orange_cones) > 0:
-                self.get_logger().debug(f'Orange cones detected: {len(orange_cones)} (no action taken)')
+                if self.should_ignore_orange_cones():
+                    current_time = time.time()
+                    elapsed_time = current_time - self.start_time
+                    remaining_time = self.orange_ignore_duration - elapsed_time
+                    self.get_logger().debug(f'Orange cones detected: {len(orange_cones)} (IGNORED - {remaining_time:.1f}s remaining)')
+                else:
+                    self.get_logger().debug(f'Orange cones detected: {len(orange_cones)} (timer expired, would be processed)')
         else:
             # Send zero steering and acceleration when not in SKIDPAD mode
             self.publish_steering_command(0.0, 0.0, msg.header.stamp)
@@ -319,8 +339,9 @@ def test_mode():
         10
     )
     
-    node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Steering')
+    node.get_logger().info('TEST MODE: Combined Controller Test with Enhanced Steering and Orange Ignore Timer')
     node.get_logger().info('Testing midpoint steering, sharp turn curvature following, and acceleration...')
+    node.get_logger().info('Orange cones ignored for first 5 seconds of operation')
     node.get_logger().info('NOTE: In normal operation, controller only runs when AMI state is SKIDPAD')
     node.get_logger().info('Press Ctrl+C to stop')
     
@@ -384,7 +405,7 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) == 1 or '--test' in sys.argv:
-        print("Running in TEST MODE - testing steering, acceleration, and sharp turn logic")
+        print("Running in TEST MODE - testing steering, acceleration, and sharp turn logic with orange ignore timer")
         print("Use 'ros2 run <package> <node>' for normal operation")
         test_mode()
     else:
