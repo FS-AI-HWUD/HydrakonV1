@@ -274,11 +274,12 @@ class CombinedController(Node):
             if closest_yellow is not None:
                 yellow_x = closest_yellow[0]
                 
-                # Estimate track width and aim for centerline with left offset
-                target_x = yellow_x + (self.estimated_track_width_pixels / 2)  # Aim for center of track
+                # Conservative offset to avoid hitting cones - aim slightly inside track center
+                conservative_offset = 180  # Increased from 120 to give more clearance from yellow cones
+                target_x = yellow_x + conservative_offset
                 
                 steering_mode = "yellow_curvature"
-                self.get_logger().debug(f'Yellow curvature steering: Yellow at {yellow_x:.1f}, Target centerline: {target_x:.1f}')
+                self.get_logger().debug(f'Yellow curvature steering: Yellow at {yellow_x:.1f}, Target (safe): {target_x:.1f}')
         
         # Case 3: Only blue cones detected - RIGHT TURN, follow curvature
         elif len(blue_cones) > 0:
@@ -286,11 +287,12 @@ class CombinedController(Node):
             if closest_blue is not None:
                 blue_x = closest_blue[0]
                 
-                # Estimate track width and aim for centerline with right offset
-                target_x = blue_x - (self.estimated_track_width_pixels / 2)  # Aim for center of track
+                # Conservative offset to avoid hitting cones - aim slightly inside track center
+                conservative_offset = 180  # Increased from 120 to give more clearance from blue cones
+                target_x = blue_x - conservative_offset
                 
                 steering_mode = "blue_curvature"
-                self.get_logger().debug(f'Blue curvature steering: Blue at {blue_x:.1f}, Target centerline: {target_x:.1f}')
+                self.get_logger().debug(f'Blue curvature steering: Blue at {blue_x:.1f}, Target (safe): {target_x:.1f}')
         
         # Convert target position to steering angle
         if target_x is not None:
