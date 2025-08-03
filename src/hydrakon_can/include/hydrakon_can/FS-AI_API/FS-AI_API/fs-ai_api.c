@@ -654,20 +654,24 @@ void fs_ai_api_vcu2ai_get_data(fs_ai_api_vcu2ai *data) {
 	if(simulate_mode) {
 		static unsigned int counter = 0;
 		
-		// if(0 == (counter % 1000)) {
-		// 	if(++VCU2AI_AS_STATE > AS_FINISHED) { VCU2AI_AS_STATE = AS_OFF; }
-		// 	if(++VCU2AI_AMI_STATE > AMI_AUTONOMOUS_DEMO) { VCU2AI_AMI_STATE = AMI_NOT_SELECTED; }
-		// }
+		// Comment this if statement if you want to set static AS_STATE
+		if(0 == (counter % 1000)) {
+			if(++VCU2AI_AS_STATE > AS_FINISHED) { VCU2AI_AS_STATE = AS_OFF; }
+			if(++VCU2AI_AMI_STATE > AMI_AUTONOMOUS_DEMO) { VCU2AI_AMI_STATE = AMI_NOT_SELECTED; }
+		}
 
-				// Force always AS_DRIVING
-		VCU2AI_AS_STATE = AS_DRIVING;
+		// Uncomment this if you want to set static AS_STATE
+		// VCU2AI_AS_STATE = AS_DRIVING;
 
-		// <<< Change this line to test one mission at a time >>>
+		// Uncomment this if you want to set static AMI_STATE (mission)
+		// VCU2AI_AMI_STATE = AMI_SKIDPAD;
 		// VCU2AI_AMI_STATE = AMI_STATIC_INSPECTION_A;
 		// VCU2AI_AMI_STATE = AMI_STATIC_INSPECTION_B;
-		VCU2AI_AMI_STATE = AMI_AUTONOMOUS_DEMO; 
+		// VCU2AI_AMI_STATE = AMI_AUTONOMOUS_DEMO; 
 		// VCU2AI_AMI_STATE = AMI_NOT_SELECTED;
-		
+
+		// comments made by @abdulmaajidaga
+
 		VCU2AI_STEER_ANGLE_MAX_raw = 272;
 		if(++VCU2AI_STEER_ANGLE_raw > VCU2AI_STEER_ANGLE_MAX_raw) {
 			VCU2AI_STEER_ANGLE_raw = -1*VCU2AI_STEER_ANGLE_MAX_raw;

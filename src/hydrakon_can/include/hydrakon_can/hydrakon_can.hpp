@@ -88,7 +88,7 @@ class HydrakonCanInterface : public rclcpp::Node {
   const float WHEELBASE_ = 1.53;             // Wheelbase of the DDT car
   const float TOTAL_MASS_ = 300;            // Total mass of the DDT car in kg
 
-  // Parameters for inspection
+  // Parameters for ramping up hardcoded inspection
   const float STEERING_RAMP_RATE = 12.0;   // degrees per second
   const float RPM_RAMP_RATE = 50.0;        // rpm per second
   const float TORQUE_RAMP_RATE = 20.0;     // Nm per second
